@@ -4,3 +4,4 @@ __pycache__/
 *.pkl
 .DS_Store
 data/
+.ipynb
