@@ -150,7 +150,7 @@ def BuzzFead_Facebook_processing():
     print("BuzzFead_Facebook loaded")
     return pl.from_pandas(preprocessing_utils.reorder_df(BuzzFead_Facebook))
 
-def BanFakeNews_processing():
+def _BanFakeNews_processing():
     merged_file_path = 'data/BanFakeNews/banfakenews_merged_full.csv'
     if not os.path.exists(merged_file_path):
         BanFakeNews_Authentic = data_io.load_csv(r'data/BanFakeNews/Authentic.csv')
@@ -185,8 +185,15 @@ def BanFakeNews_processing():
     BanFakeNews = preprocessing_utils.rename_columns(BanFakeNews, {'title_translated': 'title','text_translated': 'text'})
     default_fields = {'platform': 'website', 'has_image': 0, 'author': 'unknown', 'url': '', 'rating': 0.5}
     BanFakeNews = preprocessing_utils.add_default_fields(BanFakeNews, default_fields)  
-    print("BanFakeNews loaded")
+    BanFakeNews.to_csv('data/BanFakeNews/All_BanFakeNews.csv')
+    print("BanFakeNews saved")
     return pl.from_pandas(preprocessing_utils.reorder_df(BanFakeNews))
+
+def BanFakeNews_processing():
+    _BanFakeNews_processing()
+    df = data_io.load_csv(r'data/FakeNewsBot.csv', "polars")
+    print("BanFakeNews loaded")
+    return df
 
 def FakeNewsBot_processing():
     FakeNewsBot = data_io.load_csv(r'data/FakeNewsBot.csv')

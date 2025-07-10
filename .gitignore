@@ -16,7 +16,6 @@ venv/
 
 # Data & model files
 data/
-models/
 *.csv
 *.tsv
 *.json
