@@ -1,21 +1,21 @@
-import requests
- 
-# https://github.com/KaiDMML/FakeNewsNet/tree/master/dataset
-# https://www.kaggle.com/code/therealsampat/fake-news-detection/input
-# https://www.kaggle.com/code/vahidehdashti/detecting-fake-news/input
-# https://www.kaggle.com/code/ruchi798/how-do-you-recognize-fake-news/input
-# https://onlineacademiccommunity.uvic.ca/isot/2022/11/27/fake-news-detection-datasets/
+import preproccesing
+import polars as pl
+import data_io
+import os
 
-def get_wayback_snapshot(url):
-    api_url = "http://archive.org/wayback/available?url=" + url
-    try:
-        response = requests.get(api_url)
-        data = response.json()
-        work_url = data.get("archived_snapshots", {}).get("closest", {}).get("url")
-        is_work =  data.get("archived_snapshots", {}).get("closest", {}).get("available") 
-        return work_url, is_work
-    except:
-        return None, False
+def analyze_columns(df: pl.DataFrame):
+    for col in df.columns:
+        null_count = df.select(pl.col(col).is_null().sum()).item()
+        unique_values = df.select(pl.col(col).unique()).to_series().to_list()
+        print(f"\n🔹 Column: {col}")
+        print(f"   - Missing values: {null_count}")
+        print(f"   - Unique values: {unique_values[:20]}")
+        if len(unique_values) > 20:
+            print(f"   - ...and {len(unique_values) - 20} more")
 
-tst = get_wayback_snapshot("https://en.wikipedia.org/wiki/Michelle_Tanner")
-print(tst)
+def pipeline():
+    combined_df = preproccesing.merge_datasets()
+    analyze_columns(combined_df)
+    
+if __name__ == "__main__":
+    pipeline()
