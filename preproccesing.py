@@ -177,14 +177,6 @@ def BanFakeNews_processing():
     BanFakeNews['text_lang'] = BanFakeNews['text'].progress_apply(
             lambda x: text_utils.detect_lang(x) if pd.notnull(x) and str(x).strip() else None
         )
-    # BanFakeNews['title_translated'] = BanFakeNews.progress_apply(
-    #     lambda row: row['title'] if row['title_lang'] == 'en' else text_utils.translate(row['title'], row['title_lang']),
-    #     axis=1
-    # )
-    # BanFakeNews['text_translated'] = BanFakeNews.progress_apply(
-    #     lambda row: row['text'] if row['text_lang'] == 'en' else text_utils.translate(row['text'], row['text_lang']),
-    #     axis=1
-    # )
     BanFakeNews = text_utils.translate(BanFakeNews, "title", "title_lang", "title_translated", target_lang='en')
     BanFakeNews = text_utils.translate(BanFakeNews, "text", "text_lang", "text_translated", target_lang='en')
     BanFakeNews.drop(['text_lang','title_lang','title','text'], axis=1, inplace=True)

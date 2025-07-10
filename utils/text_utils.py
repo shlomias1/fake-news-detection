@@ -26,14 +26,6 @@ def remove_hebrew_stop_words(text):
 def detect_lang(text):
     return detect(text)
 
-# def translate(text, source_lang='auto', target_lang='en'):
-#     translator = GoogleTranslator(source=source_lang, target=target_lang)
-#     try:
-#         return translator.translate(text)
-#     except Exception as e:
-#         print(f"[Translation Error] {text[:30]}... - {e}")
-#         return text 
-
 def translate(df, text_col, lang_col, output_col, target_lang='en', max_workers=10):
     def translate_single(row):
         text = row[text_col]
