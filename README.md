@@ -63,7 +63,7 @@ source .venv/bin/activate
 
 ### 3. Install dependencies
 
-> ⚠If `requirements.txt` doesn't exist yet, create it with your current environment or use `pip freeze > requirements.txt`
+> If `requirements.txt` doesn't exist yet, create it with your current environment or use `pip freeze > requirements.txt`
 
 ```bash
 pip install -r requirements.txt
