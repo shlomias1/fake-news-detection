@@ -94,17 +94,6 @@ Please download them manually and place them under the `data/` directory. Exampl
 
 ---
 
-## To-Do
-
-* [ ] Add `requirements.txt`
-* [ ] Implement model training pipeline
-* [ ] Add model evaluation metrics
-* [ ] Optional: integrate Git LFS or DVC for handling large files
-
----
-
 ## Contact
 
 Built by [shlomias1](https://github.com/shlomias1)
-
-````
