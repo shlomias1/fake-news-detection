@@ -28,7 +28,7 @@ def FakeNewsNet_processing():
     FakeNewsNet = preprocessing_utils.add_default_fields(FakeNewsNet, default_fields)
     print("FakeNewsNet loaded")
     return pl.from_pandas(preprocessing_utils.reorder_df(FakeNewsNet))
-
+    
 def fake_true_dataset_processing():
     fake_news = data_io.load_csv(r'data/therealsampat/Fake.csv')
     true_news = data_io.load_csv(r'data/therealsampat/True.csv')
