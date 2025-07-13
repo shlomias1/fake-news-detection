@@ -180,8 +180,6 @@ def _BanFakeNews_processing():
     BanFakeNews = text_utils.translate(BanFakeNews, "title", "title_lang", "title_translated", target_lang='en')
     BanFakeNews = text_utils.translate(BanFakeNews, "text", "text_lang", "text_translated", target_lang='en')
     BanFakeNews.drop(['text_lang','title_lang','title','text'], axis=1, inplace=True)
-    BanFakeNews.rename(columns={'title_translated': 'title'}, inplace=True)
-    BanFakeNews.rename(columns={'text_translated': 'text'}, inplace=True)   
     BanFakeNews = preprocessing_utils.rename_columns(BanFakeNews, {'title_translated': 'title','text_translated': 'text'})
     default_fields = {'platform': 'website', 'has_image': 0, 'author': 'unknown', 'url': '', 'rating': 0.5}
     BanFakeNews = preprocessing_utils.add_default_fields(BanFakeNews, default_fields)  
@@ -190,9 +188,10 @@ def _BanFakeNews_processing():
     return pl.from_pandas(preprocessing_utils.reorder_df(BanFakeNews))
 
 def BanFakeNews_processing():
-    _BanFakeNews_processing()
-    df = data_io.load_csv(r'data/FakeNewsBot.csv', "polars")
-    print("BanFakeNews loaded")
+    if not os.path.exists('data/All_BanFakeNews.csv'):
+        df = _BanFakeNews_processing()
+        return df
+    df = data_io.load_csv(r'data/All_BanFakeNews.csv', "polars")
     return df
 
 def FakeNewsBot_processing():
