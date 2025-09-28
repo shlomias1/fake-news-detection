@@ -62,7 +62,7 @@ info : [INJECT] Injected 4831896 predictions. | 2025-08-10 14:05:00
 info : [RUNNER] Finished prediction for 'category' | 2025-08-10 14:05:44 
 info : [AUTO] All categories filled and dataset saved. | 2025-08-10 14:08:11 
 
-expirence 1
+expirence 1 - job-20144-rl_augmentation_bandit
 [05] arm=punct_burst  PR-AUC=0.9826  eps=0.27
 [10] arm=punct_burst  PR-AUC=0.9839  eps=0.22
 [15] arm=keyboard_typos PR-AUC=0.9840  eps=0.18
@@ -72,5 +72,35 @@ expirence 1
 [save_artifacts] Saved to: /home/shlomias/fake_news_detection/artifacts_aug/run_20250819-125108
 Artifacts saved to: /home/shlomias/fake_news_detection/artifacts_aug/run_20250819-125108
 Top arms (by value): [('keyboard_typos', 0.9775351082033489), ('punct_burst', 0.6615821687868344), ('nikud_space', 0.1969305250399937), ('homoglyphs', 0.19680464282293997), ('emoji', 0.19642551604944578)]
+
+expirence 2 - job-20309-threshold_bandit
 INFO : Coverage on val: 0.9668548064347101 | 2025-09-01 12:01:29 
 INFO : Reward (est): 0.799788961641767 | 2025-09-01 12:01:29 
+
+expirence 3 - job-20962-noise_robustness
+[noise] loaded model from: /home/shlomias/fake_news_detection/artifacts_aug/run_20250819-125108
+[noise] clean: PR-AUC=0.9915  F1_FAKE@0.5=0.9551
+[noise] keyboard_typos α=0.01:  PR-AUC=0.9909 (Δ-0.0006) | F1=0.9534 (Δ-0.0017)
+[noise] keyboard_typos α=0.03:  PR-AUC=0.9893 (Δ-0.0022) | F1=0.9492 (Δ-0.0059)
+[noise] keyboard_typos α=0.06:  PR-AUC=0.9866 (Δ-0.0049) | F1=0.9430 (Δ-0.0122)
+[noise] char_swap    α=0.01:  PR-AUC=0.9908 (Δ-0.0008) | F1=0.9528 (Δ-0.0023)
+[noise] char_swap    α=0.03:  PR-AUC=0.9889 (Δ-0.0027) | F1=0.9473 (Δ-0.0078)
+[noise] char_swap    α=0.06:  PR-AUC=0.9852 (Δ-0.0063) | F1=0.9384 (Δ-0.0167)
+[noise] punct_burst  α= 0.1:  PR-AUC=0.9915 (Δ+0.0000) | F1=0.9551 (Δ+0.0000)
+[noise] punct_burst  α= 0.2:  PR-AUC=0.9915 (Δ+0.0000) | F1=0.9551 (Δ+0.0000)
+[noise] punct_burst  α= 0.4:  PR-AUC=0.9915 (Δ+0.0000) | F1=0.9551 (Δ+0.0000)
+[noise] emoji        α= 0.1:  PR-AUC=0.9915 (Δ+0.0000) | F1=0.9551 (Δ+0.0000)
+[noise] emoji        α= 0.2:  PR-AUC=0.9915 (Δ+0.0000) | F1=0.9551 (Δ+0.0000)
+[noise] emoji        α= 0.4:  PR-AUC=0.9915 (Δ+0.0000) | F1=0.9551 (Δ+0.0000)
+[noise] spell_correct α= 0.5:  PR-AUC=0.9915 (Δ+0.0000) | F1=0.9551 (Δ+0.0000)
+[noise] saved results to: /home/shlomias/fake_news_detection/artifacts_noise/run1
+Baseline (clean): {'pr_auc': 0.9915236265725799, 'f1_fake@0.5': 0.9551145384246169}
+Results saved to: /home/shlomias/fake_news_detection/artifacts_noise/run1
+
+[ROBUST] AUD (PR-AUC): {'char_swap': 0.0001695208349705457, 'emoji': 0.0, 'keyboard_typos': 0.00013527327856522996, 'punct_burst': 0.0, 'spell_correct': 0.0}
+[ROBUST] AUD (F1@0.5): {'char_swap': 0.0004694847182473188, 'emoji': 0.0, 'keyboard_typos': 0.00034669179815241535, 'punct_burst': 0.0, 'spell_correct': 0.0}
+
+[EVAL plain] n=969492  acc=0.9461  F1_fake@0.5=0.9551  PR-AUC=0.9915  ROC-AUC=0.9884
+[EVAL abst] n=969492  coverage=0.967  acc_on_covered=0.9650  effective_acc=0.9330  F1_fake(covered)=0.9713  abst=32134
+Plain: {'n_val': 969492, 'accuracy': 0.9460800089118837, 'f1_fake@0.5': 0.9551145384246169, 'pr_auc_fake': 0.9915236265725799, 'roc_auc_fake': 0.9884164555082966}
+With abstention: {'n_val': 969492, 'coverage': 0.9668548064347101, 'accuracy_on_covered': 0.9650357707514098, 'effective_accuracy': 0.9330494733324256, 'f1_fake_on_covered': 0.9712577349965622, 'abstain_count': 32134, 'fp': 15860, 'fn': 16914}
