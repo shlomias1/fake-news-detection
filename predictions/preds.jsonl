@@ -1,0 +1,7 @@
+{"prob_fake": 0.7990148522366501, "label": "FAKE", "context": "SOU=UNK|CAT=UNK|LEN=S|PUN=P0|CLI=CB0|HOU=H0|DOW=D0|AGE=A3", "tau_used": {"low": 0.40000000000000013, "high": 0.5}}
+{"prob_fake": 0.6766399887718264, "label": "FAKE", "context": "SOU=UNK|CAT=UNK|LEN=S|PUN=P0|CLI=CB0|HOU=H0|DOW=D0|AGE=A3", "tau_used": {"low": 0.40000000000000013, "high": 0.5}}
+{"prob_fake": 0.6766399887718264, "label": "FAKE", "context": "SOU=UNK|CAT=UNK|LEN=S|PUN=P0|CLI=CB0|HOU=H0|DOW=D0|AGE=A3", "tau_used": {"low": 0.40000000000000013, "high": 0.5}}
+{"prob_fake": 0.695190245141528, "label": "FAKE", "context": "SOU=UNK|CAT=UNK|LEN=S|PUN=P0|CLI=CB0|HOU=H0|DOW=D0|AGE=A3", "tau_used": {"low": 0.40000000000000013, "high": 0.5}}
+{"prob_fake": 0.41125676955585133, "label": "ABSTAIN", "context": "SOU=UNK|CAT=UNK|LEN=M|PUN=P0|CLI=CB0|HOU=H0|DOW=D0|AGE=A3", "tau_used": {"low": 0.40000000000000013, "high": 0.5}}
+{"prob_fake": 0.4750450063702547, "label": "ABSTAIN", "context": "SOU=UNK|CAT=UNK|LEN=M|PUN=P0|CLI=CB0|HOU=H0|DOW=D0|AGE=A3", "tau_used": {"low": 0.40000000000000013, "high": 0.5}}
+{"prob_fake": 0.6451169564601187, "label": "FAKE", "context": "SOU=UNK|CAT=UNK|LEN=M|PUN=P2|CLI=CB0|HOU=H0|DOW=D0|AGE=A3", "tau_used": {"low": 0.40000000000000013, "high": 0.5}}

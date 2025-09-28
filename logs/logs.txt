@@ -1,0 +1,76 @@
+info : [AUTO] Starting autofill of missing categories. | 2025-08-10 12:16:18 
+info : [RUNNER] Starting prediction for 'type' | 2025-08-10 12:16:18 
+info : [PREPARE] Cleaning dataset for target: type | 2025-08-10 12:16:48 
+info : [PREPARE] Split into train (3776547) and test (944137) | 2025-08-10 12:16:54 
+info : [TRAIN] Training XGBoost... | 2025-08-10 12:16:54 
+info : [TRAIN] XGBoost training completed. | 2025-08-10 12:43:09 
+info : [EVALUATE] Evaluation for target: type | 2025-08-10 12:43:09 
+info : [EVALUATE] XGBoost Classification Report: | 2025-08-10 12:47:40 
+info :               precision    recall  f1-score   support
+
+        bias       0.99      1.00      1.00    154054
+   clickbait       1.00      1.00      1.00     34848
+  conspiracy       1.00      1.00      1.00     98923
+        fake       1.00      1.00      1.00    152763
+        hate       1.00      1.00      1.00     13001
+junk_science       1.00      1.00      1.00     15840
+    reliable       1.00      1.00      1.00    361465
+       rumor       1.00      1.00      1.00     75193
+      satire       0.99      0.99      0.99     17143
+  unreliable       1.00      1.00      1.00     20907
+
+    accuracy                           1.00    944137
+   macro avg       1.00      1.00      1.00    944137
+weighted avg       1.00      1.00      1.00    944137
+ | 2025-08-10 12:47:43 
+info : [EVALUATE] Accuracy - XGB: 0.999 | 2025-08-10 12:47:43 
+info : [EVALUATE] F1 Score - XGB: 0.999 | 2025-08-10 12:47:43 
+info : [SAVE] Saving models for target: type | 2025-08-10 12:47:43 
+info : [SAVE] Model saved to 'models/type_predictor_model_type_xgb.pkl' | 2025-08-10 12:47:43 
+info : [PREDICT] Predicting unknown values for 'type' using XGBoost... | 2025-08-10 12:47:43 
+info : [PREDICT] 126774 predictions completed. | 2025-08-10 12:48:11 
+info : [INJECT] Injecting predictions into Polars DataFrame for 'type' | 2025-08-10 12:48:11 
+info : [INJECT] Injected 126774 predictions. | 2025-08-10 12:48:38 
+info : [RUNNER] Finished prediction for 'type' | 2025-08-10 12:49:18 
+info : [RUNNER] Starting prediction for 'category' | 2025-08-10 12:51:46 
+info : [AUTO] Starting autofill of missing categories. | 2025-08-10 13:43:28 
+info : [RUNNER] Starting prediction for 'category' | 2025-08-10 13:43:28 
+info : [PREPARE] Cleaning dataset for target: category | 2025-08-10 13:43:58 
+info : [PREPARE] Split into train (12449) and test (3113) | 2025-08-10 13:43:58 
+info : [TRAIN] Training XGBoost... | 2025-08-10 13:43:58 
+info : [TRAIN] XGBoost training completed. | 2025-08-10 13:44:09 
+info : [EVALUATE] Evaluation for target: category | 2025-08-10 13:44:09 
+info : [EVALUATE] XGBoost Classification Report: | 2025-08-10 13:44:10 
+info :               precision    recall  f1-score   support
+
+        left       0.12      0.10      0.11       892
+        news       1.00      1.00      1.00       410
+    politics       0.59      0.63      0.61      1811
+
+    accuracy                           0.53      3113
+   macro avg       0.57      0.58      0.57      3113
+weighted avg       0.51      0.53      0.52      3113
+ | 2025-08-10 13:44:10 
+info : [EVALUATE] Accuracy - XGB: 0.529 | 2025-08-10 13:44:10 
+info : [EVALUATE] F1 Score - XGB: 0.519 | 2025-08-10 13:44:10 
+info : [SAVE] Saving models for target: category | 2025-08-10 13:44:10 
+info : [SAVE] Model saved to 'fake_news_detection/models/category_predictor_model_category_xgb.pkl' | 2025-08-10 13:44:10 
+info : [PREDICT] Predicting unknown values for 'category' using XGBoost... | 2025-08-10 13:44:10 
+info : [PREDICT] 4831896 predictions completed. | 2025-08-10 14:04:32 
+info : [INJECT] Injecting predictions into Polars DataFrame for 'category' | 2025-08-10 14:04:33 
+info : [INJECT] Injected 4831896 predictions. | 2025-08-10 14:05:00 
+info : [RUNNER] Finished prediction for 'category' | 2025-08-10 14:05:44 
+info : [AUTO] All categories filled and dataset saved. | 2025-08-10 14:08:11 
+
+expirence 1
+[05] arm=punct_burst  PR-AUC=0.9826  eps=0.27
+[10] arm=punct_burst  PR-AUC=0.9839  eps=0.22
+[15] arm=keyboard_typos PR-AUC=0.9840  eps=0.18
+[20] arm=keyboard_typos PR-AUC=0.9845  eps=0.14
+[25] arm=keyboard_typos PR-AUC=0.9847  eps=0.09
+[30] arm=keyboard_typos PR-AUC=0.9852  eps=0.05
+[save_artifacts] Saved to: /home/shlomias/fake_news_detection/artifacts_aug/run_20250819-125108
+Artifacts saved to: /home/shlomias/fake_news_detection/artifacts_aug/run_20250819-125108
+Top arms (by value): [('keyboard_typos', 0.9775351082033489), ('punct_burst', 0.6615821687868344), ('nikud_space', 0.1969305250399937), ('homoglyphs', 0.19680464282293997), ('emoji', 0.19642551604944578)]
+INFO : Coverage on val: 0.9668548064347101 | 2025-09-01 12:01:29 
+INFO : Reward (est): 0.799788961641767 | 2025-09-01 12:01:29 
