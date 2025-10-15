@@ -31,6 +31,5 @@ def pipeline():
     print("Plain:", plain)
     print("With abstention:", abst)
 
-
 if __name__ == "__main__":
     pipeline()
