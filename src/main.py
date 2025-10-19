@@ -1,35 +1,61 @@
-import preproccesing
-import polars as pl
-import data_io
-import os
-import utils.analyze as analyze
-import utils.text_utils as text_utils
-import utils.scrapper as scrapper
-from utils.category_predictor_utils import auto_fill_missing_categories
-from proccesing import build_text_features, add_without_stopwords, feat_pipeline
+# /home/shlomias/fake_news_detection/src/main.py
+import os, json
 from pathlib import Path
-import joblib, json, pandas as pd
-from experiments.noise_robustness import run_noise_robustness
-import pandas as pd
-from models_runner.eval_simple import eval_plain, eval_with_thresholds
 
-import numpy as np
 from utils.logger import _create_log
-import importlib, torch
-from utils.robust_metrics import area_under_degradation
+from models_runner.main_model import (
+    train_simple_aug_text,
+    TrainCfg,
+    ExternalKnowledgeCfg,
+    predict_with_explanation,
+)
+
+def _log(msg: str):
+    try:
+        print(msg, flush=True)
+        _create_log(msg)
+    except Exception:
+        print(msg, flush=True)
 
 def pipeline():
-    BASE = Path("/home/shlomias/fake_news_detection")
-    DF   = BASE / "data/df_feat.csv"
-    ART  = BASE / "artifacts_aug/run_20250819-125108"
-    THJ  = BASE / "artifacts_thresholds/thresholds_per_context.json"
-    plain = eval_plain(df_path=str(DF), model_dir=str(ART), val_frac=0.2, seed=42)
-    abst  = eval_with_thresholds(df_path=str(DF), model_dir=str(ART),
-                                thresholds_json=str(THJ),
-                                context_keys=("source","category","len_bin","punc_bin","clickbait"),
-                                val_frac=0.2, seed=42)
-    print("Plain:", plain)
-    print("With abstention:", abst)
+    DF   = "/home/shlomias/fake_news_detection/data/df_feat.csv"  
+    OUT  = "/home/shlomias/fake_news_detection/artifacts_simple"
+    Path(OUT).mkdir(parents=True, exist_ok=True)
+
+    use_external = bool(os.getenv("OPENAI_API_KEY", "").strip())
+    ext_cfg = ExternalKnowledgeCfg(enabled=use_external)
+
+    _log("[MAIN] starting training...")
+    train_cfg = TrainCfg(max_features=200_000, aug_frac=0.7, seed=42, test_fraction=0.20)
+
+    res_train = train_simple_aug_text(
+        df_path=DF,
+        out_dir=OUT,
+        ext_cfg=ext_cfg,
+        cfg=train_cfg,
+    )
+    _log(f"[MAIN] Saved artifacts to: {res_train['out_dir']}")
+    _log(f"[MAIN] Metrics: {json.dumps(res_train['metrics'], ensure_ascii=False)}")
+
+    MODEL_DIR = OUT
+    demo_text = "כאן הטקסט של הכתבה... הרבה סימני קריאה!!!"
+    _log("[MAIN] running demo prediction with LIME...")
+
+    res_pred = predict_with_explanation(
+        text=demo_text,
+        model_dir=MODEL_DIR,
+        explain="lime",          # "lime" | "shap" | "none"
+        top_k=10,
+        ext_cfg=ext_cfg,      
+    )
+
+    pretty = json.dumps(res_pred, ensure_ascii=False, indent=2)
+    _log("[MAIN] Demo prediction + explanation:")
+    print(pretty)
+
+    pred_out = Path(OUT) / "demo_prediction.json"
+    pred_out.write_text(pretty, encoding="utf-8")
+    _log(f"[MAIN] Demo prediction saved → {pred_out}")
 
 if __name__ == "__main__":
     pipeline()
