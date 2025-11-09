@@ -1,0 +1,174 @@
+openapi: 3.0.4
+info:
+  title: fake-news-detection
+  version: 1.0.0
+  description: |
+      - In the field of communication, there is a lot of dissemination of information that is sometimes incorrect, and because of the ease of transmitting information, there is a danger of transmitting false information to the public. 
+      - This service is designed to receive an article and classify it as fake or true. Unlike other services, this service also indicates which words made it decide that the article is true or false and what is its percentage of likelihood for each word and for the article as a whole.KE.
+
+  contact:
+    name: Shlomi Assayag
+    email: shlomiasi1@gmail.com
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+
+servers:
+  - url: http://127.0.0.1:8000
+    description: Local development
+
+tags:
+  - name: article
+    description: Classify an article and get token-level explanation
+
+paths:
+  /predict:
+    post:
+      tags: [article]
+      summary: Classify article text as FAKE/REAL with LIME token weights
+      operationId: classifyArticle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PredictRequest'
+            examples:
+              basic:
+                value:
+                  text: "Das Silicon Valley Mindset wird oft hochgepriesen. Aber was ist es genau, das es auszeichnet? Was unterscheidet exponentielle Organisationen von linearen?"
+                  top_k: 20
+                  translate: true
+                  target_lang: "en"
+      responses:
+        '200':
+          description: Classification and explanation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PredictResponse'
+              examples:
+                ok:
+                  value:
+                    label: "FAKE"
+                    prob_fake: 0.734
+                    top_tokens:
+                      - token: "!!!"
+                        weight: 0.182
+                        towards: "FAKE"
+                      - token: "day"
+                        weight: -0.041
+                        towards: "REAL"
+                    translation:
+                      enabled: true
+                      did_translate: true
+                      src_lang: "iw"
+                      tgt_lang: "en"
+        '400':
+          description: Bad request (e.g., missing text)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                missingText:
+                  value: { code: "bad_request", message: "missing 'text'" }
+        '422':
+          description: Unprocessable entity (validation error)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        default:
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    PredictRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          description: Article content to classify
+        top_k:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 15
+          description: How many influential tokens to return from LIME
+        translate:
+          type: boolean
+          default: false
+          description: Whether to auto-translate before classification
+        target_lang:
+          type: string
+          default: "en"
+          description: Target language code if translate=true (e.g., en, iw, ar, ru)
+
+    PredictResponse:
+      type: object
+      properties:
+        label:
+          type: string
+          enum: [FAKE, REAL]
+          description: Final classification
+        prob_fake:
+          type: number
+          format: float
+          description: Probability assigned to FAKE (class 0)
+        top_tokens:
+          type: array
+          description: LIME token contributions (positive → towards FAKE)
+          items:
+            $ref: '#/components/schemas/TokenWeight'
+        translation:
+          $ref: '#/components/schemas/TranslationInfo'
+
+    TokenWeight:
+      type: object
+      required: [token, weight, towards]
+      properties:
+        token:
+          type: string
+          description: The token/word
+        weight:
+          type: number
+          format: float
+          description: LIME weight for the token
+        towards:
+          type: string
+          enum: [FAKE, REAL]
+          description: Direction the token pushes the decision
+
+    TranslationInfo:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          description: Whether translation capability is enabled on server
+        did_translate:
+          type: boolean
+          description: Whether input was actually translated this call
+        src_lang:
+          type: string
+          nullable: true
+          description: Detected source language (e.g., iw, en)
+        tgt_lang:
+          type: string
+          nullable: true
+          description: Target language used (if translated)
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
