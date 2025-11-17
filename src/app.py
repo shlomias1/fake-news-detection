@@ -15,6 +15,8 @@ import shap
 import numpy as np
 
 from src.utils.text_utils import detect_lang, translate_text
+import json
+from datetime import datetime
 
 # --------------------
 # Config
@@ -35,6 +37,18 @@ def normalize_lang(lang: Optional[str]) -> str:
     if lang in ("zh", "zh-cn"): return "zh-CN"
     if lang in ("zh-tw", "zh-hant"): return "zh-TW"
     return lang
+
+PREDICTIONS_FILE = Path("predictions/preds.jsonl")
+PREDICTIONS_FILE.parent.mkdir(exist_ok=True) 
+
+def log_prediction(input_text: str, result: dict):
+    entry = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "text": input_text,
+        "result": result
+    }
+    with PREDICTIONS_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 # --------------------
 # Load model
@@ -189,6 +203,7 @@ async def api_predict(payload: Dict):
             "tgt_lang": tinfo["tgt_lang"],
         }
     }
+    log_prediction(input_text=text, result=res)
     return JSONResponse(res)
 
 # --------------------
