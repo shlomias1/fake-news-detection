@@ -1,5 +1,4 @@
-# app.py
-# FastAPI + single-page UI to classify text as FAKE/REAL and highlight influential words (LIME)
+# app.py — FastAPI + UI + LIME/SHAP chooser
 from __future__ import annotations
 import os
 from pathlib import Path
@@ -12,17 +11,17 @@ from fastapi.middleware.cors import CORSMiddleware
 import joblib
 from sklearn.pipeline import make_pipeline
 from lime.lime_text import LimeTextExplainer
+import shap
 
 from utils.text_utils import detect_lang, translate_text
 
 # --------------------
-# Config — update paths if needed
+# Config
 # --------------------
 MODEL_DIR = Path(os.getenv("FND_MODEL_DIR", "/home/shlomias/fake_news_detection/artifacts_simple"))
 VECT_PATH = MODEL_DIR / "tfidf.pkl"
 CLF_PATH  = MODEL_DIR / "sgd_logloss.pkl"
 
-# Language/translation defaults
 AUTO_TRANSLATE_DEFAULT = os.getenv("AUTO_TRANSLATE", "false").strip().lower() == "true"
 TARGET_LANG_DEFAULT    = os.getenv("TARGET_LANG", "en").strip()
 
@@ -30,44 +29,43 @@ def normalize_lang(lang: Optional[str]) -> str:
     if not lang:
         return "auto"
     lang = lang.lower()
-    if lang in ("he", "he-il", "heb", "hebrew"):
-        return "iw"          # deep_translator/Google use 'iw'
-    if lang in ("zh", "zh-cn"):
-        return "zh-CN"
-    if lang in ("zh-tw", "zh-hant"):
-        return "zh-TW"
+    if lang in ("he", "he-il", "heb", "hebrew"): return "iw"
+    if lang in ("zh", "zh-cn"): return "zh-CN"
+    if lang in ("zh-tw", "zh-hant"): return "zh-TW"
     return lang
 
+# --------------------
 # Load model
+# --------------------
 vect = joblib.load(VECT_PATH)
 clf  = joblib.load(CLF_PATH)
 pipe = make_pipeline(vect, clf)
 FAKE_LABEL = 0  # {'fake':0,'real':1}
 
+# --------------------
 # LIME explainer
-explainer = LimeTextExplainer(
+# --------------------
+explainer_lime = LimeTextExplainer(
     class_names=["FAKE(0)", "REAL(1)"],
     split_expression=r"\W+",
 )
 
-app = FastAPI(title="Fake News UI")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# --------------------
+# SHAP explainer
+# --------------------
+# We use KernelExplainer (general-purpose)
+shap_explainer = shap.KernelExplainer(
+    model=lambda xs: pipe.predict_proba(xs)[:, 0],
+    data=[""]  # minimal background; can be replaced with corpus
 )
 
 # --------------------
-# Helper: (optionally) translate, then predict + LIME
+# Translation helper
 # --------------------
 def maybe_translate(text: str, force_translate: bool | None = None, target_lang: str | None = None) -> Dict[str, str]:
     info = {
-        "text_in": text,
-        "text_used": text,
-        "src_lang": None,
-        "tgt_lang": None,
+        "text_in": text, "text_used": text,
+        "src_lang": None, "tgt_lang": None,
         "translated": False,
     }
 
@@ -96,6 +94,9 @@ def maybe_translate(text: str, force_translate: bool | None = None, target_lang:
     except Exception:
         return info
 
+# --------------------
+# Predict with LIME
+# --------------------
 def predict_with_lime(text: str, top_k: int = 15) -> Dict:
     proba = pipe.predict_proba([text])[0]
     classes = list(clf.classes_)
@@ -103,7 +104,7 @@ def predict_with_lime(text: str, top_k: int = 15) -> Dict:
     p_fake = float(proba[fake_idx])
     label  = "FAKE" if p_fake >= 0.5 else "REAL"
 
-    exp = explainer.explain_instance(
+    exp = explainer_lime.explain_instance(
         text_instance=text,
         classifier_fn=lambda xs: pipe.predict_proba(xs),
         num_features=top_k,
@@ -119,6 +120,41 @@ def predict_with_lime(text: str, top_k: int = 15) -> Dict:
     return {"label": label, "prob_fake": p_fake, "top_tokens": weights}
 
 # --------------------
+# Predict with SHAP
+# --------------------
+def predict_with_shap(text: str, top_k: int = 15) -> Dict:
+    proba = pipe.predict_proba([text])[0]
+    classes = list(clf.classes_)
+    fake_idx = classes.index(FAKE_LABEL)
+    p_fake = float(proba[fake_idx])
+    label  = "FAKE" if p_fake >= 0.5 else "REAL"
+
+    shap_values = shap_explainer.shap_values([text])[0]
+    tokens = text.split()
+
+    weights = []
+    for tok, val in zip(tokens, shap_values):
+        weights.append({
+            "token": tok,
+            "weight": float(val),
+            "towards": "FAKE" if val > 0 else "REAL",
+        })
+
+    weights = sorted(weights, key=lambda x: abs(x["weight"]), reverse=True)[:top_k]
+
+    return {"label": label, "prob_fake": p_fake, "top_tokens": weights}
+
+# --------------------
+# FastAPI
+# --------------------
+app = FastAPI(title="Fake News UI")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"],
+)
+
+# --------------------
 # API
 # --------------------
 @app.post("/api/predict")
@@ -131,9 +167,17 @@ async def api_predict(payload: Dict):
     target_lang     = (payload or {}).get("target_lang", None)
     tinfo = maybe_translate(text, force_translate=force_translate, target_lang=target_lang)
 
-    res_pred = predict_with_lime(tinfo["text_used"], top_k=int((payload or {}).get("top_k", 15)))
+    # choose explainer
+    expl = (payload or {}).get("explainer", "lime").lower()
+
+    if expl == "shap":
+        res_pred = predict_with_shap(tinfo["text_used"], top_k=int((payload or {}).get("top_k", 15)))
+    else:
+        res_pred = predict_with_lime(tinfo["text_used"], top_k=int((payload or {}).get("top_k", 15)))
+
     res = {
         **res_pred,
+        "explainer": expl,
         "translation": {
             "enabled": True,
             "did_translate": tinfo["translated"],
@@ -144,7 +188,7 @@ async def api_predict(payload: Dict):
     return JSONResponse(res)
 
 # --------------------
-# UI (single HTML page)
+# UI
 # --------------------
 @app.get("/", response_class=HTMLResponse)
 async def ui(_: Request):
@@ -174,17 +218,18 @@ async def ui(_: Request):
   <div class='max-w-5xl mx-auto p-6'>
     <header class='mb-6'>
       <h1 class='text-3xl font-bold'>בודק פייק ניוז</h1>
-      <p class='text-slate-500'>הדבק/י טקסט כתבה, לחץ/י בדיקה — נקבע פייק/אמת ונציג מילים תורמות (LIME). אופציונלית: תרגום לאנגלית לפני בדיקה.</p>
+      <p class='text-slate-500'>בחר/י הסבר LIME או SHAP, הדבק/י טקסט, ולחצי בדיקה.</p>
     </header>
 
     <div class='grid gap-4'>
       <textarea id='txt' rows='10' class='w-full p-4 rounded-2xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white' placeholder='הדבק/י כאן את הכתבה...'></textarea>
-      <div class='flex items-center gap-4'>
+
+      <div class='flex items-center flex-wrap gap-4'>
         <button id='btn' class='px-5 py-2.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 shadow'>בדיקה</button>
 
         <label class='inline-flex items-center gap-2 text-sm'>
           <input id='translate' type='checkbox' class='w-4 h-4' __CHECKED__>
-          תרגם לאנגלית לפני בדיקה
+          תרגם לפני בדיקה
         </label>
 
         <label class='inline-flex items-center gap-2 text-sm'>
@@ -194,6 +239,14 @@ async def ui(_: Request):
             <option value='iw' __SEL_IW__>iw</option>
             <option value='ar' __SEL_AR__>ar</option>
             <option value='ru' __SEL_RU__>ru</option>
+          </select>
+        </label>
+
+        <label class='inline-flex items-center gap-2 text-sm'>
+          אלגוריתם הסבר:
+          <select id='expl' class='border rounded px-2 py-1 text-sm'>
+            <option value='lime'>LIME</option>
+            <option value='shap'>SHAP</option>
           </select>
         </label>
 
@@ -215,8 +268,9 @@ async def ui(_: Request):
           <h3 class='font-semibold mb-2'>טקסט עם הדגשות</h3>
           <div id='highlight' class='leading-8 whitespace-pre-wrap break-words'></div>
         </div>
+
         <div class='mt-4 bg-white rounded-2xl border border-slate-200 p-4'>
-          <h3 class='font-semibold mb-2'>מילים תורמות (LIME)</h3>
+          <h3 class='font-semibold mb-2'>מאפיינים תורמים</h3>
           <ul id='toplist' class='grid grid-cols-1 md:grid-cols-2 gap-2'></ul>
         </div>
       </section>
@@ -228,6 +282,7 @@ const btn    = document.getElementById('btn');
 const txt    = document.getElementById('txt');
 const cbTr   = document.getElementById('translate');
 const selTgt = document.getElementById('tgt');
+const selExpl= document.getElementById('expl');
 const status = document.getElementById('status');
 const result = document.getElementById('result');
 const badge  = document.getElementById('badge');
@@ -247,15 +302,23 @@ btn.addEventListener('click', async () => {
     const r = await fetch('/api/predict', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text, top_k: 20, translate: cbTr.checked, target_lang: selTgt.value })
+      body: JSON.stringify({
+        text: text,
+        top_k: 20,
+        translate: cbTr.checked,
+        target_lang: selTgt.value,
+        explainer: selExpl.value
+      })
     });
+
     const data = await r.json();
     if (data.error) throw new Error(data.error);
 
     const isFake = data.label === 'FAKE';
     badge.textContent = isFake ? 'FAKE' : 'REAL';
     badge.className = 'px-3 py-1 rounded-full text-white text-sm ' + (isFake ? 'bg-red-600' : 'bg-emerald-600');
-    const pct = Math.round(100*data.prob_fake);
+
+    const pct = Math.round(100 * data.prob_fake);
     bar.style.width = pct + '%';
     bar.className = 'h-2 rounded-full ' + (isFake ? 'bg-red-500' : 'bg-emerald-500');
     prob.textContent = data.prob_fake.toFixed(3);
@@ -263,6 +326,7 @@ btn.addEventListener('click', async () => {
     const tr = data.translation || {};
     trinfo.textContent = tr.did_translate ? ('בוצע תרגום: ' + (tr.src_lang || '') + ' → ' + (tr.tgt_lang || '')) : '';
 
+    // Map tokens by max weight
     const tokMap = new Map();
     (data.top_tokens || []).forEach(t => {
       const key = (t.token || '').toLowerCase();
@@ -271,7 +335,8 @@ btn.addEventListener('click', async () => {
       if (!prev || Math.abs(t.weight) > Math.abs(prev.weight)) tokMap.set(key, t);
     });
 
-    const parts = text.split(/(\\p{L}+|\\d+)/u);
+    // Highlight text
+    const parts = text.split(/(\p{L}+|\d+)/u);
     const frag  = document.createDocumentFragment();
     parts.forEach(p => {
       if (!p) return;
@@ -321,6 +386,9 @@ btn.addEventListener('click', async () => {
 
     return HTMLResponse(html)
 
+# --------------------
+# Run
+# --------------------
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv('PORT', '8000'))
