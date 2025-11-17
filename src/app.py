@@ -12,13 +12,15 @@ import joblib
 from sklearn.pipeline import make_pipeline
 from lime.lime_text import LimeTextExplainer
 import shap
+import numpy as np
 
-from utils.text_utils import detect_lang, translate_text
+from src.utils.text_utils import detect_lang, translate_text
 
 # --------------------
 # Config
 # --------------------
-MODEL_DIR = Path(os.getenv("FND_MODEL_DIR", "/home/shlomias/fake_news_detection/artifacts_simple"))
+MODEL_DIR = Path(os.getenv("FND_MODEL_DIR", r"C:/Users/HadassaAssayag/OneDrive - Harlan Holding/Desktop/fake_news_detection/artifacts_simple"))
+
 VECT_PATH = MODEL_DIR / "tfidf.pkl"
 CLF_PATH  = MODEL_DIR / "sgd_logloss.pkl"
 
@@ -54,11 +56,12 @@ explainer_lime = LimeTextExplainer(
 # SHAP explainer
 # --------------------
 # We use KernelExplainer (general-purpose)
-shap_explainer = shap.KernelExplainer(
-    model=lambda xs: pipe.predict_proba(xs)[:, 0],
-    data=[""]  # minimal background; can be replaced with corpus
-)
+background = pipe[:-1].transform([""]).toarray()
 
+shap_explainer = shap.KernelExplainer(
+    lambda X: pipe[-1].predict_proba(X)[:, 0],
+    background
+)
 # --------------------
 # Translation helper
 # --------------------
@@ -129,7 +132,8 @@ def predict_with_shap(text: str, top_k: int = 15) -> Dict:
     p_fake = float(proba[fake_idx])
     label  = "FAKE" if p_fake >= 0.5 else "REAL"
 
-    shap_values = shap_explainer.shap_values([text])[0]
+    X_text = pipe[:-1].transform([text])
+    shap_values = shap_explainer.shap_values(X_text)[0]
     tokens = text.split()
 
     weights = []
