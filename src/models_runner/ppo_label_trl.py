@@ -16,18 +16,18 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
 
 # =========================
-#   קונפיגים ותועלות
+#   Configurations and benefits
 # =========================
 @dataclass
 class RLRewardCosts:
     r_correct: float = 1.0
-    c_fp: float = 4.0     # false positive (REAL שסווג כ-FAKE)
-    c_fn: float = 2.0     # false negative (FAKE שסווג כ-REAL)
-    gamma_margin: float = 0.2  # בונוס ביטחון לפי margin
+    c_fp: float = 4.0     # false positive (REAL classified as FAKE)
+    c_fn: float = 2.0     # false negative (FAKE classified as REAL)
+    gamma_margin: float = 0.2  # Security bonus by margin
 
 @dataclass
 class PPORunCfg:
-    base_model: str = "gpt2-medium"   # אם חסר זיכרון: "distilgpt2"
+    base_model: str = "gpt2-medium"   # If out of memory: "distillgpt2"
     use_8bit: bool = True
     lora_r: int = 16
     lora_alpha: int = 32
@@ -38,12 +38,12 @@ class PPORunCfg:
     ppo_epochs: int = 4
     target_kl: float = 0.1
     max_prompt_len: int = 768
-    max_new_tokens: int = 1          # מייצרים טוקן יחיד (תגית)
+    max_new_tokens: int = 1          # Generate a single token (tag)
     temperature: float = 0.9
     top_p: float = 0.9
     seed: int = 42
 
-# מיפוי הלייבלים אצלך
+# Mapping your labels
 FAKE_LABEL_DATASET = 0  # {'fake': 0, 'real': 1}
 REAL_LABEL_DATASET = 1
 
@@ -55,7 +55,7 @@ def set_seed(seed: int):
     torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)
 
 # =========================
-#     טעינת דאטה
+#     Loading data
 # =========================
 def load_df_texts_labels(df_path: str) -> Tuple[List[str], np.ndarray, pl.DataFrame]:
     df = pl.read_parquet(df_path) if str(df_path).endswith(".parquet") else pl.read_csv(df_path)
@@ -84,7 +84,7 @@ def build_prompts(texts: List[str]) -> List[str]:
 
 class NewsLabelDataset(Dataset):
     def __init__(self, prompts: List[str], labels_for_ppo: np.ndarray):
-        # labels_for_ppo: 1=FAKE, 0=REAL (מותאם ל-reward)
+        # labels_for_ppo: 1=FAKE, 0=REAL (reward-adjusted)
         self.prompts = prompts
         self.labels = labels_for_ppo.astype(np.int64)
     def __len__(self): return len(self.prompts)
@@ -99,7 +99,7 @@ def split_train_val(prompts: List[str], y: np.ndarray, val_frac: float=0.2, seed
     return ([prompts[i] for i in tr], y[tr]), ([prompts[i] for i in va], y[va])
 
 # =========================
-#   טוקנייזר ומודל (TRL)
+#   Tokenizer and Model (TRL)
 # =========================
 def make_tokenizer_and_model(cfg: PPORunCfg, device_map=None):
     import importlib
@@ -122,10 +122,10 @@ def make_tokenizer_and_model(cfg: PPORunCfg, device_map=None):
     else:
         cfg.use_8bit = False
 
-    # טען את המודל (ללא offloading)
+    # Load the model (without offloading)
     model_vh = AutoModelForCausalLMWithValueHead.from_pretrained(cfg.base_model, **load_kwargs)
 
-    # עדכון embedding אם הוספנו טוקנים
+    # Update embedding if we added tokens
     if added > 0:
         model_vh.pretrained_model.resize_token_embeddings(len(tok))
 
@@ -139,7 +139,7 @@ def make_tokenizer_and_model(cfg: PPORunCfg, device_map=None):
         base = prepare_model_for_kbit_training(base)
     model_vh.pretrained_model = get_peft_model(base, lora)
 
-    # העבר התקן ידנית (GPU אם קיים, אחרת CPU)
+    # Manually switch device (GPU if available, otherwise CPU)
     device = torch.device("cuda") if has_cuda else torch.device("cpu")
     model_vh.to(device)
 
@@ -149,12 +149,12 @@ def make_tokenizer_and_model(cfg: PPORunCfg, device_map=None):
 
 
 # =========================
-#       SFT קצר (אופציונלי)
+#       Short SFT (optional)
 # =========================
 def run_sft_optional(tok, model_causal_with_value_head, train_prompts: List[str], y_for_ppo: np.ndarray,
                      epochs=1, lr=5e-5, bs=8):
     """
-    SFT קצר כדי ללמד את המודל לענות בתגית. y_for_ppo: 1=FAKE, 0=REAL.
+    Short SFT to teach the model to answer with a tag. y_for_ppo: 1=FAKE, 0=REAL.
     """
     base = model_causal_with_value_head.pretrained_model
     class SFTDataset(Dataset):
@@ -181,11 +181,11 @@ def run_sft_optional(tok, model_causal_with_value_head, train_prompts: List[str]
     tr.train()
 
 # =========================
-#      פונקציית תגמול
+#      Reward function
 # =========================
 def compute_rewards_from_scores(
-    scores: torch.Tensor,        # logits: [B, V] עבור הצעד שנוצר
-    generated_ids: torch.Tensor, # ids שנוצרו: [B, 1] או [B]
+    scores: torch.Tensor,        # logits: [B, V] for the generated step
+    generated_ids: torch.Tensor, # ids generated: [B, 1] or [B]
     gold: torch.Tensor,          # 1=FAKE, 0=REAL
     id_fake: int, id_real: int,
     costs: RLRewardCosts
@@ -206,13 +206,13 @@ def compute_rewards_from_scores(
     base = base - costs.c_fp * fp.float()
     base = base - costs.c_fn * fn.float()
 
-    # בונוס ביטחון לפי מרווח בין שתי התגיות
+    # Security bonus according to the gap between the two tags
     margin = (p_fake - p_real).abs()
     reward = base + costs.gamma_margin * margin
     return reward
 
 # =========================
-#        אימון PPO
+#        PPO training
 # =========================
 def ppo_train(
     df_feat_path: str,
@@ -230,14 +230,14 @@ def ppo_train(
     prompts = build_prompts(texts)
     (tr_prompts, y_tr_orig), (va_prompts, y_va_orig) = split_train_val(prompts, y_orig, val_frac, ppo_cfg.seed)
 
-    # מיפוי ליעד PPO: 1=FAKE, 0=REAL
+    # Mapping to PPO destination: 1=FAKE, 0=REAL
     y_tr = (y_tr_orig == FAKE_LABEL_DATASET).astype(np.int64)
     y_va = (y_va_orig == FAKE_LABEL_DATASET).astype(np.int64)
 
-    # --- טוקנייזר/מודל ---
+    # --- Tokenizer/Model ---
     tok, model_vh, id_fake, id_real = make_tokenizer_and_model(ppo_cfg, device_map="auto")
 
-    # --- SFT (חימום) ---
+    # --- SFT (warm-up) ---
     if do_sft_warmup:
         run_sft_optional(tok, model_vh, tr_prompts, y_tr, epochs=1, lr=5e-5, bs=max(2, ppo_cfg.mini_batch_size))
 
@@ -269,7 +269,7 @@ def ppo_train(
 
     model_vh.train()
     global_step = 0
-    for epoch in range(2):  # התחל ב-2–3 אפוקים, תעלה אחרי פיילוט
+    for epoch in range(2):  
         for batch in loader:
             global_step += 1
             batch_prompts = batch["prompt"]
@@ -285,14 +285,14 @@ def ppo_train(
 
             rewards = compute_rewards_from_scores(scores_last, responses, gold, id_fake, id_real, costs)
 
-            # TRL מצפה לרשימות טנזורים ו-rewards כ-list של floats
+            # TRL expects tensor and reward lists as a list of floats
             q_tensors = [t for t in enc["input_ids"]]
             r_tensors = [t for t in responses]
             rewards_list = rewards.detach().cpu().tolist()
 
             stats = ppo_trainer.step(q_tensors, r_tensors, rewards_list)
             if global_step % 20 == 0:
-                # התאמה לגרסאות שונות של TRL: נסה כמה מפתחות
+                # Compatibility with different versions of TRL: try some keys
                 kl = None
                 for k in ("kl", "objective/kl", "ppo/kl"):
                     if k in stats:
@@ -300,7 +300,7 @@ def ppo_train(
                 mean_r = float(np.mean(rewards_list))
                 print(f"[PPO] epoch={epoch+1} step={global_step} reward_mean={mean_r:.4f}  kl={kl}")
 
-    # --- הערכה קצרה על הולידציה ---
+    # --- A brief assessment of Holidation ---
     model_vh.eval()
     with torch.no_grad():
         enc_va = tok(va_prompts, return_tensors="pt", padding=True, truncation=True,
@@ -312,7 +312,7 @@ def ppo_train(
         probs = torch.softmax(logits, dim=-1)
         p_fake = probs[:, id_fake].detach().cpu().numpy()
 
-    # --- שמירת ארטיפקטים ---
+    # --- Saving artifacts ---
     (out_dir / "tokenizer").mkdir(parents=True, exist_ok=True)
     tok.save_pretrained(out_dir / "tokenizer")
     ppo_trainer.model.save_pretrained(out_dir / "ppo_model")  # כולל value head + LoRA
@@ -330,7 +330,7 @@ def ppo_train(
         "n_val": int(len(y_va_orig)),
         "p_fake_mean": float(np.mean(p_fake)),
         "p_fake_std": float(np.std(p_fake)),
-        # לפי המיפוי המקורי:
+        
         "label_counts": {"fake": int((y_va_orig==FAKE_LABEL_DATASET).sum()),
                          "real": int((y_va_orig==REAL_LABEL_DATASET).sum())}
     }
@@ -341,13 +341,10 @@ def ppo_train(
     return {"out_dir": str(out_dir), "eval": eval_json}
 
 # =========================
-#        אינפרנס
+#        Inference
 # =========================
 def ppo_predict_label(artifacts_dir: str | Path, title: str, text: str,
                       tau_low=0.3, tau_high=0.7) -> Dict[str, float | str]:
-    """
-    טוען את המודל המאומן ומחזיר תגית + הסתברות לפייק.
-    """
     artifacts_dir = Path(artifacts_dir)
     tok = AutoTokenizer.from_pretrained(artifacts_dir / "tokenizer")
     model_vh = AutoModelForCausalLMWithValueHead.from_pretrained(artifacts_dir / "ppo_model", device_map="auto")
