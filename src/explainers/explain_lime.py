@@ -12,7 +12,7 @@ clf  = joblib.load(f"{ART}/sgd_logloss.pkl")
 
 # Build a predict_proba pipeline on a single string
 pipe = make_pipeline(vect, clf)
-class_names = ["FAKE(0)","REAL(1)"]  # מיפוי שלך {'fake':0,'real':1}
+class_names = ["FAKE(0)","REAL(1)"]  # {'fake':0,'real':1}
 explainer = LimeTextExplainer(class_names=class_names, split_expression=r"\W+")
 
 def explain_text(text, num_features=10):
