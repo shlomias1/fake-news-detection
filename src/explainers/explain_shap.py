@@ -7,7 +7,7 @@ ART = "/home/shlomias/fake_news_detection/artifacts_aug/run_20250819-125108"
 vect = joblib.load(f"{ART}/tfidf.pkl")
 clf  = joblib.load(f"{ART}/sgd_logloss.pkl")
 
-# בחר background קטן ליציבות (מספר דוגמאות אימון)
+# Choose a small background for stability (several training examples)
 background_texts = ["דוגמה קצרה", "בדיקה נוספת"]  # החלף לתתי-מדגם שלך
 X_bg = vect.transform(background_texts)
 
