@@ -22,7 +22,7 @@ import pygad
 import gc
 
 # ===========================
-#   מיפוי מחלקות בדאטה
+#   labels mapping
 # ===========================
 FAKE_LABEL = 0  # {'fake': 0, 'real': 1}
 REAL_LABEL = 1
@@ -31,7 +31,7 @@ def set_seed(seed: int):
     np.random.seed(seed)
 
 # ===========================
-#   קונפיגים
+#   configs
 # ===========================
 @dataclass
 class CostConfig:
@@ -58,7 +58,7 @@ class GAConfig:
     max_features_char: Optional[int] = None
 
 # ===========================
-#   עזר: הסתברות למחלקת FAKE
+#   Help: Probability for FAKE class
 # ===========================
 def proba_fake(clf, X) -> np.ndarray:
     """בחר את עמודת ההסתברויות המתאימה ל-FAKE לפי clf.classes_."""
@@ -66,7 +66,7 @@ def proba_fake(clf, X) -> np.ndarray:
     return clf.predict_proba(X)[:, idx]
 
 # ===========================
-#   טעינת דאטה והכנה
+#   load data & preperation
 # ===========================
 @dataclass
 class Prepared:
@@ -75,7 +75,7 @@ class Prepared:
     num_cols: List[str]
     y: np.ndarray
     groups: Optional[List[str]]
-    time_ord_idx: Optional[np.ndarray]  # אינדקסים ממוינים לפי זמן (אם יש date_published)
+    time_ord_idx: Optional[np.ndarray]  # Indexes sorted by time (if date_published)
 
 def _ensure_datetime(col: pl.Series) -> pl.Series:
     if col.dtype in (pl.Datetime, pl.Date):
@@ -86,7 +86,7 @@ def _ensure_datetime(col: pl.Series) -> pl.Series:
         return pl.Series(values=[None]*len(col), dtype=pl.Datetime)
 
 def prepare_data(df: pl.DataFrame) -> Prepared:
-    # טקסט מועדף: titleplus_text_ns → title_ns_text → text_ns_text → title + text
+    # titleplus_text_ns → title_ns_text → text_ns_text → title + text
     for c in ("titleplus_text_ns", "title_ns_text", "text_ns_text"):
         if c in df.columns:
             X_txt = df[c].cast(pl.Utf8).fill_null("").to_list()
@@ -98,7 +98,7 @@ def prepare_data(df: pl.DataFrame) -> Prepared:
 
     y = df.get_column("label").cast(pl.Int64).to_numpy()
 
-    # פיצ'רים מספריים: כל Int/Float חוץ מ-label
+    # Numeric features: any Int/Float except label
     num_cols: List[str] = []
     for c, dt in zip(df.columns, df.dtypes):
         if c == "label":
@@ -108,12 +108,12 @@ def prepare_data(df: pl.DataFrame) -> Prepared:
             num_cols.append(c)
     X_num = df.select(num_cols).to_numpy() if num_cols else None
 
-    # קבוצות (source) + סדר זמן
+    # Groups (source) + Time order
     groups = df.get_column("source").cast(pl.Utf8).fill_null("UNK").to_list() if "source" in df.columns else None
 
     if "date_published" in df.columns:
         dt = _ensure_datetime(df.get_column("date_published"))
-        # אם יש תאריכים—סדר אינדקסים עולה בזמן, נשתמש בו אם יבקשו split בזמן
+        # If there are dates—index order ascending in time, we will use it if they ask for split in time
         order = np.argsort(dt.fill_null(pl.datetime(1970,1,1)).to_numpy())
         time_ord_idx = order
     else:
@@ -122,10 +122,10 @@ def prepare_data(df: pl.DataFrame) -> Prepared:
     return Prepared(X_txt=X_txt, X_num=X_num, num_cols=num_cols, y=y, groups=groups, time_ord_idx=time_ord_idx)
 
 # ===========================
-#   מדדי מטרה (Fitness)
+#   Fitness metrics
 # ===========================
 def pr_auc_reward(p_fake: np.ndarray, y: np.ndarray) -> float:
-    """PR-AUC כאשר ה-Positive הוא FAKE (y==0)."""
+    """PR-AUC when the Positive is FAKE (y==0)."""
     y_pos = (y == FAKE_LABEL).astype(int)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -138,7 +138,7 @@ def cost_reward(
     tau_high: float,
     cost: CostConfig
 ) -> float:
-    """תגמול מבוסס עלות עבור ספים נתונים; y: 0=fake, 1=real."""
+    """Cost-based reward for given thresholds; y: 0=fake, 1=real."""
     pred_fake = p_fake > tau_high
     pred_real = p_fake < tau_low
     abstain   = ~(pred_fake | pred_real)
@@ -154,7 +154,7 @@ def cost_reward(
     return float(r.mean())
 
 # ===========================
-#   בניית וקטורייזרים לפי גנים
+#   Building vectorizers by genes
 # ===========================
 def build_vectorizers_from_genes(genes, ga_cfg: GAConfig):
     (word_ng_max, char_pair_idx, min_df, C_log10, use_num, tau_low, tau_high) = genes
@@ -162,7 +162,7 @@ def build_vectorizers_from_genes(genes, ga_cfg: GAConfig):
     char_pair_idx = int(round(char_pair_idx))
     min_df = int(round(min_df))
 
-    # ברירות מחדל בטוחות אם לא סופק בקונפיג:
+    # Safe defaults if not provided in config:
     max_w = ga_cfg.max_features_word or 100_000
     max_c = ga_cfg.max_features_char or 200_000
 
@@ -177,20 +177,20 @@ def build_vectorizers_from_genes(genes, ga_cfg: GAConfig):
         min_df=min_df,
         sublinear_tf=True,
         max_features=max_w,
-        dtype=np.float32,          # ← מפחית חצי זיכרון
+        dtype=np.float32,         
     )
     v_char = TfidfVectorizer(
-        analyzer="char_wb",        # ← פחות פיצ'רים מ-"char"
+        analyzer="char_wb",        
         ngram_range=(char_ng_min, char_ng_max),
-        min_df=5,                  # ← מעט מחמיר לסינון
+        min_df=5,                
         sublinear_tf=True,
         max_features=max_c,
-        dtype=np.float32,          # ← float32
+        dtype=np.float32,     
     )
     return v_word, v_char
 
 # ===========================
-#   הערכת כרומוזום יחיד (CV)
+#   Single chromosome evaluation (CV)
 # ===========================
 import gc
 
@@ -210,7 +210,7 @@ def evaluate_genes_cv(genes, data, ga_cfg, reward_mode, cost_cfg) -> float:
         data.X_txt, data.X_num, data.y, data.num_cols, data.groups, data.time_ord_idx
     )
 
-    # בוחר מפצל
+    # Splitter selector
     if ga_cfg.cv_mode == "group" or (ga_cfg.cv_mode == "auto" and ga_cfg.use_group_if_source and groups is not None):
         uniq = len(set(groups)) if groups is not None else 0
         n_splits = min(ga_cfg.n_splits, max(2, uniq)) if uniq >= 2 else 2
@@ -239,13 +239,13 @@ def evaluate_genes_cv(genes, data, ga_cfg, reward_mode, cost_cfg) -> float:
         Xtr = hstack([Xtr_w, Xtr_c], format="csr", dtype=np.float32)
         Xva = hstack([Xva_w, Xva_c], format="csr", dtype=np.float32)
 
-        # שחרור זיכרון ביניים
+        # Freeing cache memory
         del Xtr_w, Xva_w, Xtr_c, Xva_c
         gc.collect()
 
-        # פיצ'רים מספריים (אם יש), ודא float32
+        # Numeric features (if any), make sure float32
         if use_num and (X_num is not None) and (len(num_cols) > 0):
-            # MaxAbsScaler שומר דלילות וקליל יותר בזיכרון
+            # MaxAbsScaler keeps sparseness and is lighter on memory
             from sklearn.preprocessing import MaxAbsScaler
             scaler = MaxAbsScaler(copy=False)
             Xtr_num = scaler.fit_transform(X_num[tr_idx]).astype(np.float32)
@@ -256,20 +256,19 @@ def evaluate_genes_cv(genes, data, ga_cfg, reward_mode, cost_cfg) -> float:
             gc.collect()
 
         if reward_mode == "pr_auc":
-            # בלי כיול: מספיק דירוג ה-margin
+            # No calibration: margin rating is enough
             base = LinearSVC(C=C, class_weight="balanced", dual=False, random_state=ga_cfg.random_state)
             base.fit(Xtr, ytr)
             margin = base.decision_function(Xva).astype(np.float32)
-            # כיוון הסימן כך ש"גדול יותר" = FAKE (label 0)
-            # LinearSVC.classes_ מסודרות עולה; margin חיובי = מחלקה classes_[1]
+            # Set the sign so that "greater" = FAKE (label 0)
+            # LinearSVC.classes_ are ordered ascending; margin positive = class classes_[1]
             if base.classes_[1] == FAKE_LABEL:
                 scores = margin
             else:
                 scores = -margin
             r = pr_auc_reward(scores, yva)
-        else:  # "cost" – צריך הסתברויות
+        else: 
             base = LinearSVC(C=C, class_weight="balanced", dual=False, random_state=ga_cfg.random_state)
-            # כיול CV=2 כדי לחסוך זיכרון
             clf  = CalibratedClassifierCV(base, cv=2, method="sigmoid")
             clf.fit(Xtr, ytr)
             p_fake_va = proba_fake(clf, Xva)
@@ -278,7 +277,7 @@ def evaluate_genes_cv(genes, data, ga_cfg, reward_mode, cost_cfg) -> float:
         rewards.append(r)
         valid_fold += 1
 
-        # ניקוי אגרסיבי בכל קיפול
+        # Aggressive cleaning in every fold
         del Xtr, Xva
         gc.collect()
 
@@ -287,7 +286,7 @@ def evaluate_genes_cv(genes, data, ga_cfg, reward_mode, cost_cfg) -> float:
     return float(np.mean(rewards))
 
 # ===========================
-#   הרצת GA
+#   Running GA
 # ===========================
 def run_ga_on_df(
     df: pl.DataFrame,
@@ -295,14 +294,14 @@ def run_ga_on_df(
     reward_mode: str = "pr_auc",  # או "cost"
     cost_cfg: CostConfig = CostConfig()
 ) -> Tuple[List[float], float, Dict]:
-    """
-    מחזיר: best_genes, best_fitness, info
-    genes = [word_ng_max, char_pair_idx, min_df, C_log10, use_num, tau_low, tau_high]
+    """ 
+    Returns: best_genes, best_fitness, info 
+    genes = [word_ng_max, char_pair_idx, min_df, C_log10, use_num, tau_low, tau_high] 
     """
     set_seed(ga_cfg.random_state)
     data = prepare_data(df)
 
-    # תיקון/נרמול פתרון לפני הערכה (עמידות למוטציה/קרוסאובר)
+    # Fix/normalize solution before evaluation (mutation/crossover resistance)
     def _repair_solution(sol: List[float]) -> List[float]:
         sol = list(sol)
         # word_ng_max ∈ {1,2}
@@ -313,7 +312,7 @@ def run_ga_on_df(
         sol[1] = float(int(round(sol[1])))
         if sol[1] < 0: sol[1] = 0.0
         if sol[1] > 1: sol[1] = 1.0
-        # min_df ∈ [2..20] שלם
+        # min_df ∈ [2..20] full
         sol[2] = float(int(round(sol[2])))
         if sol[2] < 2:  sol[2] = 2.0
         if sol[2] > 20: sol[2] = 20.0
@@ -357,7 +356,7 @@ def run_ga_on_df(
     ]
     assert len(gene_space) == 7, f"unexpected gene_space length: {len(gene_space)}"
 
-    # אוכלוסייה התחלתית ידנית → עוקף warning/bug ב-init של PyGAD
+    # Manual initial population → bypasses warning/bug in PyGAD init
     def _sample_gene(g):
         if isinstance(g, list):
             return float(np.random.choice(g))
@@ -377,13 +376,13 @@ def run_ga_on_df(
         fitness_func=fitness_func,
         gene_space=gene_space,
         random_seed=ga_cfg.random_state,
-        allow_duplicate_genes=True,           # ← מונע את באג generations_completed
-        suppress_warnings=True                # ← ולמנוע warning-ים בעייתיים
+        allow_duplicate_genes=True,           
+        suppress_warnings=True            
     )
     ga.run()
 
     best_sol, best_fit, _ = ga.best_solution()
-    # נעביר את האלוף דרך התיקון כדי לשמור עמידות
+    # We will put the champion through the repair to maintain durability
     best_sol = _repair_solution(best_sol)
 
     best = {
@@ -399,7 +398,7 @@ def run_ga_on_df(
     return list(map(float, best_sol)), float(best_fit), info
 
 # ===========================
-#   אימון סופי ושמירת ארטיפקטים
+#   Final training and artifact preservation
 # ===========================
 def train_final_and_save(
     df: pl.DataFrame,
@@ -430,7 +429,7 @@ def train_final_and_save(
     clf  = CalibratedClassifierCV(base, cv=5)
     clf.fit(X, data.y)
 
-    # שמירה
+    # save
     joblib.dump(v_word, out_dir / "tfidf_word.pkl")
     joblib.dump(v_char, out_dir / "tfidf_char.pkl")
     if scaler is not None:
@@ -455,7 +454,7 @@ def train_final_and_save(
     return {"out_dir": str(out_dir)}
 
 # ===========================
-#   חיזוי על כתבה חדשה
+#   Prediction about a new article
 # ===========================
 def predict_article(
     title: str,
@@ -480,7 +479,7 @@ def predict_article(
     Xc = v_char.transform([raw])
     X  = hstack([Xw, Xc], format="csr")
 
-    # פיצ'רים מספריים אם נשמרו
+    # Numeric features if saved
     try:
         d = joblib.load(artifacts_dir / "num_scaler.pkl")
         scaler = d["scaler"]; num_cols = d["num_cols"]
