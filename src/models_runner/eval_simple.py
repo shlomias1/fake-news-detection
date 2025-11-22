@@ -12,11 +12,11 @@ from sklearn.metrics import (
     average_precision_score, roc_auc_score
 )
 
-# מיפוי המחלקות שלך
+# labels mapping
 FAKE_LABEL = 0   # {'fake': 0, 'real': 1}
 REAL_LABEL = 1
 
-# לוג ידידותי: גם print וגם _create_log אם קיים
+# Friendly log: both print and _create_log if present
 def _log(msg: str):
     print(msg)
     try:
@@ -44,7 +44,7 @@ def _proba_fake(clf, X) -> np.ndarray:
     return clf.predict_proba(X)[:, idx]
 
 # ---------------------------------------------------------
-# 1) הערכת מודל בסיסי (בלי Abstention)
+#1) Basic Model Evaluation (Without Abstention)
 # ---------------------------------------------------------
 def eval_plain(
     df_path: str | Path,
@@ -65,7 +65,7 @@ def eval_plain(
     X_va = vect.transform(Xva_txt)
     p_fk = _proba_fake(clf, X_va)     # p(fake) \in [0,1]
 
-    # חיזוי בינארי: p>0.5 => FAKE(=0), אחרת REAL(=1)
+    # Binary prediction: p>0.5 => FAKE(=0), else REAL(=1)
     y_hat = np.where(p_fk > 0.5, FAKE_LABEL, REAL_LABEL)
 
     acc = float(accuracy_score(y_va, y_hat))
@@ -89,8 +89,8 @@ def eval_plain(
     return res
 
 # ---------------------------------------------------------
-# 2) הערכה עם Abstention לפי ספים פר-קונטקסט
-#    משתמש ב-threshold_bandit לבניית הקונטקסט
+# 2) Evaluation with Abstention by Spin-ContextChapter
+#    Uses threshold_bandit to build the context
 # ---------------------------------------------------------
 def eval_with_thresholds(
     df_path: str | Path,
@@ -100,7 +100,7 @@ def eval_with_thresholds(
     val_frac: float = 0.2,
     seed: int = 42
 ) -> Dict:
-    from models_runner.threshold_bandit import build_context, Thresholds  # משתמש בכלים שכבר כתבת
+    from models_runner.threshold_bandit import build_context, Thresholds 
 
     model_dir = Path(model_dir)
     vect = joblib.load(model_dir / "tfidf.pkl")
@@ -129,7 +129,7 @@ def eval_with_thresholds(
     X_va = vect.transform(Xva_txt)
     p_fk = _proba_fake(clf, X_va)
 
-    # בונים קונטקסטים ויישום הספים
+    # Building contexts and implementing thresholds
     ctx = build_context(df_va, keys=context_keys)
 
     y_hat = np.full(len(p_fk), -1, dtype=int)
@@ -149,7 +149,7 @@ def eval_with_thresholds(
     acc_on_covered = float(accuracy_score(y_va[covered], y_hat[covered])) if covered.any() else 0.0
     effective_accuracy = acc_on_covered * coverage  # אם מחשיבים abstain כשגיאה
 
-    # F1 על covered (אופציונלי)
+    # F1 on covered (optional)
     if covered.any():
         f1_fake_cov = float(f1_score((y_va[covered]==FAKE_LABEL).astype(int),
                                      (y_hat[covered]==FAKE_LABEL).astype(int), zero_division=0))
