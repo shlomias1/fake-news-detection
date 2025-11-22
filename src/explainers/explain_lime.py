@@ -5,12 +5,12 @@ from sklearn.pipeline import make_pipeline
 from sklearn.linear_model import SGDClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-# טען ארטיפקטים שכבר יש לך
+# Load artifacts that already exist
 ART = "/home/shlomias/fake_news_detection/artifacts_aug/run_20250819-125108"
 vect = joblib.load(f"{ART}/tfidf.pkl")
 clf  = joblib.load(f"{ART}/sgd_logloss.pkl")
 
-# בנה pipeline של predict_proba על מחרוזת אחת
+# Build a predict_proba pipeline on a single string
 pipe = make_pipeline(vect, clf)
 class_names = ["FAKE(0)","REAL(1)"]  # מיפוי שלך {'fake':0,'real':1}
 explainer = LimeTextExplainer(class_names=class_names, split_expression=r"\W+")
