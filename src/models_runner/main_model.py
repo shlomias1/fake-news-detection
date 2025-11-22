@@ -26,7 +26,7 @@ def _to_csr_int32(X):
     return X
 
 # =========================
-# 0) קבועי תוויות
+# 0) Label constants
 # =========================
 FAKE_LABEL = 0  # {'fake': 0, 'real': 1}
 REAL_LABEL = 1
@@ -316,8 +316,16 @@ def predict_with_explanation(
 
     elif explain == "shap":
         import shap
-        bg = ["", "חדשות", "דיווח", "כתבה", "פרסום"]
-        X_bg = vect.transform(bg)
+        import polars as pl
+        import random
+        random.seed(42)
+        DF = "/home/shlomias/fake_news_detection/data/df_feat.csv"
+        df = pl.read_parquet(DF) if DF.endswith(".parquet") else pl.read_csv(DF)
+        text_col = "text_ns_text" if "text_ns_text" in df.columns else "text"
+        all_texts = [t or "" for t in df.get_column(text_col).cast(pl.Utf8).fill_null("").to_list()]
+        k = min(100, len(all_texts))
+        background_texts = random.sample(all_texts, k=k)
+        X_bg = vect.transform(background_texts)
         X_bg = _to_csr_int32(X_bg)
         expl = shap.LinearExplainer(clf, X_bg, feature_perturbation="interventional")
         sv_all = expl.shap_values(X)
