@@ -101,10 +101,9 @@ test_prob_tfidf  = clf_tfidf.predict_proba(X_test_tfidf)[:, 1]
 print(f"Loading MiniLM model: {MINILM_MODEL_NAME}")
 sbert = SentenceTransformer(MINILM_MODEL_NAME)
 
-if TRAIN_EMB_PATH.exists() and TEST_EMB_PATH.exists():
-    print("Loading saved embeddings...")
+if TRAIN_EMB_PATH.exists():
+    print("Loading saved embeddings train...")
     X_train_emb = np.load(TRAIN_EMB_PATH)
-    X_test_emb  = np.load(TEST_EMB_PATH)
 else:
     print("Encoding MiniLM embeddings (train)...")
     X_train_emb = sbert.encode(
@@ -115,6 +114,13 @@ else:
         normalize_embeddings=True,
     ).astype(np.float32)
 
+    np.save(TRAIN_EMB_PATH, X_train_emb)
+    print(f"Saved embeddings train to: {TRAIN_EMB_PATH}")
+
+if TEST_EMB_PATH.exists():
+    print("Loading saved embeddings test...")
+    X_test_emb  = np.load(TEST_EMB_PATH)
+else:
     print("Encoding MiniLM embeddings (test)...")
     X_test_emb = sbert.encode(
         test_texts,
@@ -123,11 +129,8 @@ else:
         convert_to_numpy=True,
         normalize_embeddings=True,
     ).astype(np.float32)
-
-    np.save(TRAIN_EMB_PATH, X_train_emb)
     np.save(TEST_EMB_PATH, X_test_emb)
-    print(f"Saved embeddings to:\n  {TRAIN_EMB_PATH}\n  {TEST_EMB_PATH}")
-
+    print(f"Saved embeddings test to: {TEST_EMB_PATH}")
 
 # ===================== Model 2: Embeddings + SGD =====================
 if EMB_CLF_PATH.exists():
