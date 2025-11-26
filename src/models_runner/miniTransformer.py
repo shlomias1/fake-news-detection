@@ -1,40 +1,53 @@
 import os
 import json
-import pandas as pd
-import numpy as np
-import joblib
 from pathlib import Path
 
-from sklearn.linear_model import SGDClassifier
+import numpy as np
+import pandas as pd
+import joblib
+
+from sklearn.linear_model import SGDClassifier, LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import train_test_split
 
 from sentence_transformers import SentenceTransformer
-from scipy.sparse import csr_matrix, hstack
+from sklearn.feature_extraction.text import TfidfVectorizer
 
-# ==== File Settings ====
+
+# ===================== Paths & Settings =====================
 DATA_PATH = Path("/home/shlomias/fake_news_detection/data/df_feat.csv")
 TEXT_COL = "text_ns_text"
 LABEL_COL = "label"
 
-ARTIFACTS_DIR = Path(os.getenv("FND_MODEL_DIR", "/home/shlomias/fake_news_detection/artifacts_simple"))
+ARTIFACTS_DIR = Path(os.getenv("FND_MODEL_DIR",
+                               "/home/shlomias/fake_news_detection/artifacts_simple"))
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
+# use existing TF-IDF vectorizer
 TFIDF_PATH = ARTIFACTS_DIR / "tfidf.pkl"
-COMBINED_MODEL_PATH = ARTIFACTS_DIR / "miniTransformer/sgd_combined_no_chunks.pkl"
-TEST_METRICS_PATH = ARTIFACTS_DIR / "miniTransformer/test_metrics_no_chunks.json"
+# use existing TF-IDF classifier (SGD)
+TFIDF_EXISTING_CLF_PATH = ARTIFACTS_DIR / "sgd_logloss.pkl"
 
-TRAIN_EMB_PATH = ARTIFACTS_DIR / "miniTransformer/train_embeddings.npy"
-TEST_EMB_PATH = ARTIFACTS_DIR / "miniTransformer/test_embeddings.npy"
+# נבנה תת-תיקייה למודל ה-Late Fusion
+LF_DIR = ARTIFACTS_DIR / "late_fusion"
+LF_DIR.mkdir(parents=True, exist_ok=True)
 
-# ==== parameters ====
-BATCH_SIZE_EMB = 64
+EMB_CLF_PATH  = LF_DIR / "clf_emb_sgd.pkl"
+META_CLF_PATH = LF_DIR / "clf_meta_logreg.pkl"
+
+TRAIN_EMB_PATH = LF_DIR / "train_embeddings.npy"
+TEST_EMB_PATH  = LF_DIR / "test_embeddings.npy"
+
+TEST_METRICS_PATH = LF_DIR / "test_metrics.json"
+
 MINILM_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+BATCH_SIZE_EMB = 64
 
 TRAIN_PATH = DATA_PATH.with_name("df_feat_train.csv")
-TEST_PATH = DATA_PATH.with_name("df_feat_test.csv")
+TEST_PATH  = DATA_PATH.with_name("df_feat_test.csv")
 
-# ==== Train–Test Split (only if needed) ====
+
+# ===================== Train–Test Split =====================
 if not TRAIN_PATH.exists() or not TEST_PATH.exists():
     print("Creating train/test files...")
     df = pd.read_csv(DATA_PATH, usecols=[TEXT_COL, LABEL_COL]).dropna()
@@ -49,27 +62,49 @@ if not TRAIN_PATH.exists() or not TEST_PATH.exists():
 else:
     print("Using existing train/test CSV files")
 
-# ==== Load TF-IDF ====
-print(f"Loading TF-IDF: {TFIDF_PATH}")
-tfidf = joblib.load(TFIDF_PATH)
+train_df = pd.read_csv(TRAIN_PATH).dropna()
+test_df  = pd.read_csv(TEST_PATH).dropna()
 
-# ==== Load SBERT ====
+train_texts = train_df[TEXT_COL].astype(str).tolist()
+test_texts  = test_df[TEXT_COL].astype(str).tolist()
+
+train_y = train_df[LABEL_COL].astype(int).values
+test_y  = test_df[LABEL_COL].astype(int).values
+
+
+# ===================== Load existing TF-IDF + classifier =====================
+if not TFIDF_PATH.exists():
+    raise FileNotFoundError(f"TF-IDF vectorizer not found at {TFIDF_PATH}")
+
+print(f"Loading existing TF-IDF vectorizer from: {TFIDF_PATH}")
+tfidf: TfidfVectorizer = joblib.load(TFIDF_PATH)
+
+if not TFIDF_EXISTING_CLF_PATH.exists():
+    raise FileNotFoundError(
+        f"Existing TF-IDF classifier not found at {TFIDF_EXISTING_CLF_PATH}.\n"
+        f"Update TFIDF_EXISTING_CLF_PATH in the script to point to your working model file."
+    )
+
+print(f"Loading existing TF-IDF classifier from: {TFIDF_EXISTING_CLF_PATH}")
+clf_tfidf: SGDClassifier = joblib.load(TFIDF_EXISTING_CLF_PATH)
+
+print("Transforming TF-IDF (train/test)...")
+X_train_tfidf = tfidf.transform(train_texts).astype(np.float32)
+X_test_tfidf  = tfidf.transform(test_texts).astype(np.float32)
+
+print("Getting TF-IDF probabilities...")
+train_prob_tfidf = clf_tfidf.predict_proba(X_train_tfidf)[:, 1]
+test_prob_tfidf  = clf_tfidf.predict_proba(X_test_tfidf)[:, 1]
+
+
+# ===================== Embeddings (MiniLM) =====================
 print(f"Loading MiniLM model: {MINILM_MODEL_NAME}")
 sbert = SentenceTransformer(MINILM_MODEL_NAME)
 
-# ==== Load Train Data ====
-train_df = pd.read_csv(TRAIN_PATH).dropna()
-train_texts = train_df[TEXT_COL].astype(str).tolist()
-train_y = train_df[LABEL_COL].astype(int).values
-
-# ==== TF-IDF Train ====
-print("Transforming TF-IDF (train)...")
-X_train_tfidf = tfidf.transform(train_texts)
-
-# ==== Embedding Train ====
-if TRAIN_EMB_PATH.exists():
-    print("Loading saved train embeddings...")
+if TRAIN_EMB_PATH.exists() and TEST_EMB_PATH.exists():
+    print("Loading saved embeddings...")
     X_train_emb = np.load(TRAIN_EMB_PATH)
+    X_test_emb  = np.load(TEST_EMB_PATH)
 else:
     print("Encoding MiniLM embeddings (train)...")
     X_train_emb = sbert.encode(
@@ -78,83 +113,111 @@ else:
         show_progress_bar=True,
         convert_to_numpy=True,
         normalize_embeddings=True,
-    )
+    ).astype(np.float32)
+
+    print("Encoding MiniLM embeddings (test)...")
+    X_test_emb = sbert.encode(
+        test_texts,
+        batch_size=BATCH_SIZE_EMB,
+        show_progress_bar=True,
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+    ).astype(np.float32)
+
     np.save(TRAIN_EMB_PATH, X_train_emb)
+    np.save(TEST_EMB_PATH, X_test_emb)
+    print(f"Saved embeddings to:\n  {TRAIN_EMB_PATH}\n  {TEST_EMB_PATH}")
 
-# Convert embeddings to sparse matrix
-X_train_emb_sparse = csr_matrix(X_train_emb)
 
-# Force int32 indices (critical!)
-X_train_emb_sparse.indices = X_train_emb_sparse.indices.astype(np.int32)
-X_train_emb_sparse.indptr = X_train_emb_sparse.indptr.astype(np.int32)
+# ===================== Model 2: Embeddings + SGD =====================
+if EMB_CLF_PATH.exists():
+    print(f"Loading existing embeddings classifier: {EMB_CLF_PATH}")
+    clf_emb = joblib.load(EMB_CLF_PATH)
+else:
+    print("Training embeddings classifier (SGD)...")
+    clf_emb = SGDClassifier(
+        loss="log_loss",
+        penalty="l2",
+        alpha=1e-5,
+        max_iter=1000,
+        tol=1e-3,
+        random_state=42,
+    )
+    clf_emb.fit(X_train_emb, train_y)
+    joblib.dump(clf_emb, EMB_CLF_PATH)
+    print(f"Saved embeddings classifier to: {EMB_CLF_PATH}")
 
-# Also enforce int32 for TF-IDF indices
-X_train_tfidf.indices = X_train_tfidf.indices.astype(np.int32)
-X_train_tfidf.indptr = X_train_tfidf.indptr.astype(np.int32)
+print("Getting embedding-based probabilities...")
+train_prob_emb = clf_emb.predict_proba(X_train_emb)[:, 1]
+test_prob_emb  = clf_emb.predict_proba(X_test_emb)[:, 1]
 
-# ==== Combine Features ====
-X_train_combined = hstack([X_train_tfidf, X_train_emb_sparse], format='csr')
 
-# ==== Train Classifier ====
-clf = SGDClassifier(
-    loss="log_loss",
-    penalty="l2",
-    alpha=1e-5,
-    max_iter=1000,
-    tol=1e-3
-)
+# ===================== Meta-Classifier (Late Fusion) =====================
+train_meta_X = np.vstack([train_prob_tfidf, train_prob_emb]).T
+test_meta_X  = np.vstack([test_prob_tfidf, test_prob_emb]).T
 
-print("Training classifier on full dataset...")
-clf.fit(X_train_combined, train_y)
+if META_CLF_PATH.exists():
+    print(f"Loading existing meta-classifier: {META_CLF_PATH}")
+    meta_clf = joblib.load(META_CLF_PATH)
+else:
+    print("Training meta-classifier (LogisticRegression)...")
+    meta_clf = LogisticRegression(
+        solver="lbfgs",
+        max_iter=1000,
+        random_state=42,
+    )
+    meta_clf.fit(train_meta_X, train_y)
+    joblib.dump(meta_clf, META_CLF_PATH)
+    print(f"Saved meta-classifier to: {META_CLF_PATH}")
 
-# ==== TEST SET ====
-test_df = pd.read_csv(TEST_PATH).dropna()
-test_texts = test_df[TEXT_COL].astype(str).tolist()
-test_y = test_df[LABEL_COL].astype(int).values
+print("Predicting with meta-classifier...")
+test_meta_pred = meta_clf.predict(test_meta_X)
 
-print("TF-IDF (test)...")
-X_test_tfidf = tfidf.transform(test_texts)
+test_meta_acc = accuracy_score(test_y, test_meta_pred)
+test_meta_f1  = f1_score(test_y, test_meta_pred, average="binary")
 
-print("Embedding (test)...")
-X_test_emb = sbert.encode(
-    test_texts,
-    batch_size=BATCH_SIZE_EMB,
-    show_progress_bar=True,
-    convert_to_numpy=True,
-    normalize_embeddings=True,
-)
-np.save(TEST_EMB_PATH, X_test_emb)
+print("\n=== Late Fusion (Meta Model) ===")
+print(f"TEST Accuracy: {test_meta_acc:.4f}")
+print(f"TEST F1:       {test_meta_f1:.4f}")
 
-# Create sparse matrix from embeddings
-X_test_emb_sparse = csr_matrix(X_test_emb)
+# מדדי בסיס למודלים לבד
+base_tfidf_pred = (test_prob_tfidf >= 0.5).astype(int)
+base_emb_pred   = (test_prob_emb >= 0.5).astype(int)
 
-# === Fix int64 → int32 for TF-IDF ===
-X_test_tfidf.indices = X_test_tfidf.indices.astype(np.int32)
-X_test_tfidf.indptr = X_test_tfidf.indptr.astype(np.int32)
+base_tfidf_acc = accuracy_score(test_y, base_tfidf_pred)
+base_tfidf_f1  = f1_score(test_y, base_tfidf_pred, average="binary")
 
-# === Fix int64 → int32 for embeddings sparse ===
-X_test_emb_sparse.indices = X_test_emb_sparse.indices.astype(np.int32)
-X_test_emb_sparse.indptr = X_test_emb_sparse.indptr.astype(np.int32)
+base_emb_acc = accuracy_score(test_y, base_emb_pred)
+base_emb_f1  = f1_score(test_y, base_emb_pred, average="binary")
 
-# === Combine features (must use format='csr') ===
-X_test_combined = hstack([X_test_tfidf, X_test_emb_sparse], format='csr')
+print("\n=== Base Models ===")
+print(f"TF-IDF model    → Acc: {base_tfidf_acc:.4f}, F1: {base_tfidf_f1:.4f}")
+print(f"Embeddings model→ Acc: {base_emb_acc:.4f}, F1: {base_emb_f1:.4f}")
 
-test_pred = clf.predict(X_test_combined)
-
-test_acc = accuracy_score(test_y, test_pred)
-test_f1 = f1_score(test_y, test_pred, average="binary")
-
-print(f"\nTEST Accuracy: {test_acc:.4f}")
-print(f"TEST F1: {test_f1:.4f}")
-
-# ==== Save Model + Metrics ====
-joblib.dump(clf, COMBINED_MODEL_PATH)
-print(f"Saved model to: {COMBINED_MODEL_PATH}")
+# ===================== Save Metrics =====================
+metrics = {
+    "late_fusion": {
+        "test_accuracy": float(test_meta_acc),
+        "test_f1": float(test_meta_f1),
+    },
+    "tfidf_model": {
+        "test_accuracy": float(base_tfidf_acc),
+        "test_f1": float(base_tfidf_f1),
+    },
+    "emb_model": {
+        "test_accuracy": float(base_emb_acc),
+        "test_f1": float(base_emb_f1),
+    },
+}
 
 with open(TEST_METRICS_PATH, "w", encoding="utf-8") as f:
-    json.dump({"test_accuracy": test_acc, "test_f1": test_f1}, f, indent=2)
-print(f"Saved test metrics to: {TEST_METRICS_PATH}")
+    json.dump(metrics, f, indent=2)
 
-print("\nSaved embeddings:")
-print(f"  Train: {TRAIN_EMB_PATH}")
-print(f"  Test:  {TEST_EMB_PATH}")
+print(f"\nSaved metrics to: {TEST_METRICS_PATH}")
+print("\nArtifacts:")
+print(f"  TF-IDF vectorizer: {TFIDF_PATH}")
+print(f"  Existing TF-IDF classifier: {TFIDF_EXISTING_CLF_PATH}")
+print(f"  Embeddings classifier: {EMB_CLF_PATH}")
+print(f"  Meta-classifier: {META_CLF_PATH}")
+print(f"  Train embeddings: {TRAIN_EMB_PATH}")
+print(f"  Test embeddings:  {TEST_EMB_PATH}")
