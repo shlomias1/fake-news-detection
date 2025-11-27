@@ -1,4 +1,4 @@
-# app.py — FastAPI + UI + LIME/SHAP chooser
+# app.py — FastAPI + UI + LIME/SHAP + בחירת מודל
 from __future__ import annotations
 import os
 from pathlib import Path
@@ -21,10 +21,19 @@ from datetime import datetime
 # --------------------
 # Config
 # --------------------
-MODEL_DIR = Path(os.getenv("FND_MODEL_DIR", r"C:/Users/HadassaAssayag/OneDrive - Harlan Holding/Desktop/fake_news_detection/artifacts_simple"))
+MODEL_DIR = Path(os.getenv(
+    "FND_MODEL_DIR",
+    r"C:/Users/HadassaAssayag/OneDrive - Harlan Holding/Desktop/fake_news_detection/artifacts_simple"
+))
 
 VECT_PATH = MODEL_DIR / "tfidf.pkl"
 CLF_PATH  = MODEL_DIR / "sgd_logloss.pkl"
+
+# מודלים נוספים (אמבדינגים + פיז'ן)
+EMB_CLF_PATH  = MODEL_DIR / "late_fusion" / "clf_emb_sgd.pkl"
+META_CLF_PATH = MODEL_DIR / "late_fusion" / "clf_meta_logreg.pkl"
+
+MINILM_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 AUTO_TRANSLATE_DEFAULT = os.getenv("AUTO_TRANSLATE", "false").strip().lower() == "true"
 TARGET_LANG_DEFAULT    = os.getenv("TARGET_LANG", "en").strip()
@@ -39,7 +48,7 @@ def normalize_lang(lang: Optional[str]) -> str:
     return lang
 
 PREDICTIONS_FILE = Path("predictions/preds.jsonl")
-PREDICTIONS_FILE.parent.mkdir(exist_ok=True) 
+PREDICTIONS_FILE.parent.mkdir(exist_ok=True)
 
 def log_prediction(input_text: str, result: dict):
     entry = {
@@ -51,7 +60,7 @@ def log_prediction(input_text: str, result: dict):
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 # --------------------
-# Load model
+# Load base TF-IDF model
 # --------------------
 vect = joblib.load(VECT_PATH)
 clf  = joblib.load(CLF_PATH)
@@ -59,7 +68,26 @@ pipe = make_pipeline(vect, clf)
 FAKE_LABEL = 0  # {'fake':0,'real':1}
 
 # --------------------
-# LIME explainer
+# Load additional models (if exist)
+# --------------------
+try:
+    clf_emb = joblib.load(EMB_CLF_PATH)
+except Exception:
+    clf_emb = None
+
+try:
+    meta_clf = joblib.load(META_CLF_PATH)
+except Exception:
+    meta_clf = None
+
+try:
+    from sentence_transformers import SentenceTransformer
+    sbert = SentenceTransformer(MINILM_MODEL_NAME)
+except Exception:
+    sbert = None
+
+# --------------------
+# LIME explainer (על גבי מודל ה-TF-IDF)
 # --------------------
 explainer_lime = LimeTextExplainer(
     class_names=["FAKE(0)", "REAL(1)"],
@@ -67,15 +95,14 @@ explainer_lime = LimeTextExplainer(
 )
 
 # --------------------
-# SHAP explainer
+# SHAP explainer (גם על TF-IDF בלבד)
 # --------------------
-# We use KernelExplainer (general-purpose)
 background = pipe[:-1].transform([""]).toarray()
-
 shap_explainer = shap.KernelExplainer(
     lambda X: pipe[-1].predict_proba(X)[:, 0],
     background
 )
+
 # --------------------
 # Translation helper
 # --------------------
@@ -112,15 +139,91 @@ def maybe_translate(text: str, force_translate: bool | None = None, target_lang:
         return info
 
 # --------------------
-# Predict with LIME
+# Classification backends
 # --------------------
-def predict_with_lime(text: str, top_k: int = 15) -> Dict:
+def predict_tfidf(text: str) -> Dict:
+    """חיזוי עם מודל ה-TF-IDF הקיים (pipe)."""
     proba = pipe.predict_proba([text])[0]
     classes = list(clf.classes_)
     fake_idx = classes.index(FAKE_LABEL)
     p_fake = float(proba[fake_idx])
     label  = "FAKE" if p_fake >= 0.5 else "REAL"
+    return {
+        "model_used": "tfidf",
+        "label": label,
+        "prob_fake": p_fake,
+        "prob_fake_tfidf": p_fake,
+        "prob_fake_emb": None,
+    }
 
+def predict_emb(text: str) -> Dict:
+    """חיזוי עם אמבדינגים + מסווג על אמבדינגים בלבד."""
+    if clf_emb is None or sbert is None:
+        raise RuntimeError("מודל האמבדינגים לא מוגדר (clf_emb / sbert חסרים).")
+
+    emb = sbert.encode(
+        [text],
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+    )[0].astype(np.float32)
+    proba = clf_emb.predict_proba(emb.reshape(1, -1))[0]
+    classes = list(clf_emb.classes_)
+    fake_idx = classes.index(FAKE_LABEL)
+    p_fake = float(proba[fake_idx])
+    label  = "FAKE" if p_fake >= 0.5 else "REAL"
+    return {
+        "model_used": "emb",
+        "label": label,
+        "prob_fake": p_fake,
+        "prob_fake_tfidf": None,
+        "prob_fake_emb": p_fake,
+    }
+
+def predict_fusion(text: str) -> Dict:
+    """
+    Late Fusion:
+    - מחשב הסתברות FAKE ממודל ה-TF-IDF
+    - מחשב הסתברות FAKE ממודל האמבדינגים
+    - מזין את שתיהן למטה-מסווג (meta_clf)
+    """
+    if meta_clf is None:
+        raise RuntimeError("מטה-מסווג (late fusion) לא מוגדר (meta_clf חסר).")
+    if clf_emb is None or sbert is None:
+        raise RuntimeError("מודל האמבדינגים לא מוגדר (clf_emb / sbert חסרים).")
+
+    # TF-IDF prob
+    base = predict_tfidf(text)
+    p_fake_tfidf = base["prob_fake_tfidf"]
+
+    # Emb prob
+    emb = sbert.encode(
+        [text],
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+    )[0].astype(np.float32)
+    proba_emb = clf_emb.predict_proba(emb.reshape(1, -1))[0]
+    fake_idx_emb = list(clf_emb.classes_).index(FAKE_LABEL)
+    p_fake_emb = float(proba_emb[fake_idx_emb])
+
+    # Meta
+    meta_X = np.array([[p_fake_tfidf, p_fake_emb]], dtype=np.float32)
+    proba_meta = meta_clf.predict_proba(meta_X)[0]
+    fake_idx_meta = list(meta_clf.classes_).index(FAKE_LABEL)
+    p_fake_final = float(proba_meta[fake_idx_meta])
+    label = "FAKE" if p_fake_final >= 0.5 else "REAL"
+
+    return {
+        "model_used": "fusion",
+        "label": label,
+        "prob_fake": p_fake_final,
+        "prob_fake_tfidf": p_fake_tfidf,
+        "prob_fake_emb": p_fake_emb,
+    }
+
+# --------------------
+# Explanation helpers (LIME/SHAP על TF-IDF)
+# --------------------
+def explain_with_lime(text: str, top_k: int = 15) -> Dict:
     exp = explainer_lime.explain_instance(
         text_instance=text,
         classifier_fn=lambda xs: pipe.predict_proba(xs),
@@ -133,19 +236,9 @@ def predict_with_lime(text: str, top_k: int = 15) -> Dict:
             "weight": float(w),
             "towards": "FAKE" if w > 0 else "REAL",
         })
+    return {"top_tokens": weights}
 
-    return {"label": label, "prob_fake": p_fake, "top_tokens": weights}
-
-# --------------------
-# Predict with SHAP
-# --------------------
-def predict_with_shap(text: str, top_k: int = 15) -> Dict:
-    proba = pipe.predict_proba([text])[0]
-    classes = list(clf.classes_)
-    fake_idx = classes.index(FAKE_LABEL)
-    p_fake = float(proba[fake_idx])
-    label  = "FAKE" if p_fake >= 0.5 else "REAL"
-
+def explain_with_shap(text: str, top_k: int = 15) -> Dict:
     X_text = pipe[:-1].transform([text])
     shap_values = shap_explainer.shap_values(X_text)[0]
     tokens = text.split()
@@ -159,8 +252,7 @@ def predict_with_shap(text: str, top_k: int = 15) -> Dict:
         })
 
     weights = sorted(weights, key=lambda x: abs(x["weight"]), reverse=True)[:top_k]
-
-    return {"label": label, "prob_fake": p_fake, "top_tokens": weights}
+    return {"top_tokens": weights}
 
 # --------------------
 # FastAPI
@@ -183,19 +275,39 @@ async def api_predict(payload: Dict):
 
     force_translate = (payload or {}).get("translate", None)
     target_lang     = (payload or {}).get("target_lang", None)
+    model_choice    = (payload or {}).get("model", "tfidf").lower() 
+    expl            = (payload or {}).get("explainer", "lime").lower()
+
     tinfo = maybe_translate(text, force_translate=force_translate, target_lang=target_lang)
+    used_text = tinfo["text_used"]
 
-    # choose explainer
-    expl = (payload or {}).get("explainer", "lime").lower()
+    # --- classification לפי בחירת המודל ---
+    try:
+        if model_choice == "emb":
+            pred = predict_emb(used_text)
+        elif model_choice == "fusion":
+            pred = predict_fusion(used_text)
+        else:
+            pred = predict_tfidf(used_text)
+            model_choice = "tfidf"
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
+    # --- explanation תמיד על TF-IDF ---
     if expl == "shap":
-        res_pred = predict_with_shap(tinfo["text_used"], top_k=int((payload or {}).get("top_k", 15)))
+        exp = explain_with_shap(used_text, top_k=int((payload or {}).get("top_k", 15)))
     else:
-        res_pred = predict_with_lime(tinfo["text_used"], top_k=int((payload or {}).get("top_k", 15)))
+        expl = "lime"
+        exp = explain_with_lime(used_text, top_k=int((payload or {}).get("top_k", 15)))
 
     res = {
-        **res_pred,
+        "model_used": model_choice,
         "explainer": expl,
+        "label": pred["label"],
+        "prob_fake": pred["prob_fake"],
+        "prob_fake_tfidf": pred["prob_fake_tfidf"],
+        "prob_fake_emb": pred["prob_fake_emb"],
+        "top_tokens": exp["top_tokens"],
         "translation": {
             "enabled": True,
             "did_translate": tinfo["translated"],
@@ -203,6 +315,7 @@ async def api_predict(payload: Dict):
             "tgt_lang": tinfo["tgt_lang"],
         }
     }
+
     log_prediction(input_text=text, result=res)
     return JSONResponse(res)
 
@@ -237,7 +350,7 @@ async def ui(_: Request):
   <div class='max-w-5xl mx-auto p-6'>
     <header class='mb-6'>
       <h1 class='text-3xl font-bold'>בודק פייק ניוז</h1>
-      <p class='text-slate-500'>בחר/י הסבר LIME או SHAP, הדבק/י טקסט, ולחצי בדיקה.</p>
+      <p class='text-slate-500'>בחר/י מודל חיזוי, אלגוריתם הסבר, הדבק/י טקסט ולחצי בדיקה.</p>
     </header>
 
     <div class='grid gap-4'>
@@ -266,6 +379,15 @@ async def ui(_: Request):
           <select id='expl' class='border rounded px-2 py-1 text-sm'>
             <option value='lime'>LIME</option>
             <option value='shap'>SHAP</option>
+          </select>
+        </label>
+
+        <label class='inline-flex items-center gap-2 text-sm'>
+          מודל חיזוי:
+          <select id='model' class='border rounded px-2 py-1 text-sm'>
+            <option value='tfidf'>TF-IDF + מסווג</option>
+            <option value='emb'>אמבדינגים + מסווג</option>
+            <option value='fusion'>מודל משולב (Late Fusion)</option>
           </select>
         </label>
 
@@ -302,6 +424,7 @@ const txt    = document.getElementById('txt');
 const cbTr   = document.getElementById('translate');
 const selTgt = document.getElementById('tgt');
 const selExpl= document.getElementById('expl');
+const selModel = document.getElementById('model');
 const status = document.getElementById('status');
 const result = document.getElementById('result');
 const badge  = document.getElementById('badge');
@@ -326,7 +449,8 @@ btn.addEventListener('click', async () => {
         top_k: 20,
         translate: cbTr.checked,
         target_lang: selTgt.value,
-        explainer: selExpl.value
+        explainer: selExpl.value,
+        model: selModel.value
       })
     });
 
