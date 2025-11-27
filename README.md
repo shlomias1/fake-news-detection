@@ -71,6 +71,7 @@ cd fake-news-detection
 python -m venv .venv
 # Activate on Windows:
 .venv\Scripts\activate
+python -m uvicorn src.app:app --reload --host 0.0.0.0 --port 8000
 # Or on Linux/macOS:
 source .venv/bin/activate
 ```
