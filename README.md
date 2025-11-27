@@ -124,4 +124,3 @@ Please download them manually and place them under the `data/` directory. Exampl
 Built by [shlomias1](https://github.com/shlomias1)
 
 ---
-רוצה שאעשה את זה?
