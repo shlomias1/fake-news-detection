@@ -36,7 +36,7 @@ paths:
             examples:
               basic:
                 value:
-                  text: "זהו טקסט לדוגמה לבדיקה"
+                  text: Abu Maazen in 2025 still hates Israel and wants to meet with Iran to destroy them
                   top_k: 20
                   translate: true
                   target_lang: "en"
@@ -54,10 +54,10 @@ paths:
                     label: "FAKE"
                     prob_fake: 0.734
                     top_tokens:
-                      - token: "חדשות"
+                      - token: "2025"
                         weight: 0.182
                         towards: "FAKE"
-                      - token: "טוב"
+                      - token: "destroy"
                         weight: -0.041
                         towards: "REAL"
                     explainer: "lime"
