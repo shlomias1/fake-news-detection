@@ -1,10 +1,11 @@
-openapi: 3.0.4
+openapi: 3.0.3
 info:
   title: Fake News Detection API
-  version: 1.0.0
+  version: 1.1.0
   description: |
-    Service to classify articles as FAKE or REAL and provide token-level explanations.
-    Supports LIME and SHAP explainers and optional automatic translation.
+    Service to classify articles as FAKE or REAL using multiple model strategies (TF-IDF, Embeddings, Late Fusion).
+    Provides token-level explanations using LIME or SHAP (based on TF-IDF features).
+    Supports optional automatic translation.
   contact:
     name: Shlomi Assayag
     email: shlomiasi1@gmail.com
@@ -25,7 +26,7 @@ paths:
     post:
       tags:
         - article
-      summary: Classify article text as FAKE/REAL with token-level explanation
+      summary: Classify article text with selected model and explanation
       operationId: classifyArticle
       requestBody:
         required: true
@@ -34,12 +35,13 @@ paths:
             schema:
               $ref: '#/components/schemas/PredictRequest'
             examples:
-              basic:
+              fusion_example:
+                summary: Late Fusion prediction
                 value:
-                  text: Abu Maazen in 2025 still hates Israel and wants to meet with Iran to destroy them
-                  top_k: 20
-                  translate: true
-                  target_lang: "en"
+                  text: "Abu Maazen in 2025 still hates Israel and wants to meet with Iran to destroy them"
+                  top_k: 15
+                  translate: false
+                  model: "fusion"
                   explainer: "lime"
       responses:
         '200':
@@ -49,22 +51,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/PredictResponse'
               examples:
-                ok:
+                success_fusion:
                   value:
                     label: "FAKE"
-                    prob_fake: 0.734
+                    prob_fake: 0.985
+                    model_used: "fusion"
+                    prob_fake_tfidf: 0.92
+                    prob_fake_emb: 0.99
                     top_tokens:
                       - token: "2025"
-                        weight: 0.182
+                        weight: 0.45
                         towards: "FAKE"
                       - token: "destroy"
-                        weight: -0.041
-                        towards: "REAL"
+                        weight: 0.12
+                        towards: "FAKE"
                     explainer: "lime"
                     translation:
                       enabled: true
-                      did_translate: true
-                      src_lang: "iw"
+                      did_translate: false
+                      src_lang: "en"
                       tgt_lang: "en"
         '400':
           description: Bad request (e.g., missing text)
@@ -72,19 +77,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-              examples:
-                missingText:
-                  value:
-                    code: "bad_request"
-                    message: "missing 'text'"
-        '422':
-          description: Validation error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-        default:
-          description: Unexpected error
+        '500':
+          description: Internal Server Error (e.g., model missing)
           content:
             application/json:
               schema:
@@ -119,6 +113,11 @@ components:
           default: "lime"
           enum: [lime, shap]
           description: Choice of explainer method
+        model:
+          type: string
+          default: "tfidf"
+          enum: [tfidf, emb, fusion]
+          description: "Model strategy: 'tfidf' (Classic), 'emb' (Embeddings), or 'fusion' (Late Fusion)"
 
     PredictResponse:
       type: object
@@ -126,14 +125,28 @@ components:
         label:
           type: string
           enum: [FAKE, REAL]
-          description: Final classification
+          description: Final classification label
         prob_fake:
           type: number
           format: float
-          description: Probability assigned to FAKE
+          description: Final probability assigned to FAKE (0.0 to 1.0)
+        model_used:
+          type: string
+          enum: [tfidf, emb, fusion]
+          description: The model strategy actually used
+        prob_fake_tfidf:
+          type: number
+          format: float
+          nullable: true
+          description: Raw probability from the TF-IDF model (may be null if not used/calculated)
+        prob_fake_emb:
+          type: number
+          format: float
+          nullable: true
+          description: Raw probability from the Embedding model (may be null if not used/calculated)
         top_tokens:
           type: array
-          description: Token-level contributions
+          description: Token-level contributions (always based on TF-IDF features)
           items:
             $ref: '#/components/schemas/TokenWeight'
         explainer:
@@ -179,9 +192,8 @@ components:
 
     Error:
       type: object
-      required: [code, message]
+      required: [message]
       properties:
-        code:
+        error:
           type: string
-        message:
-          type: string
+          description: Error details
