@@ -1,4 +1,3 @@
-# models_runner/main_model.py
 from __future__ import annotations
 import re, random, json, os, textwrap
 from dataclasses import dataclass
@@ -8,20 +7,27 @@ from typing import List, Dict, Tuple, Optional
 import numpy as np
 import polars as pl
 import joblib
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import SGDClassifier
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, average_precision_score
-from sklearn.pipeline import make_pipeline
+from sklearn.metrics import (
+    accuracy_score, f1_score, roc_auc_score, average_precision_score,
+    roc_curve, confusion_matrix
+)
 from sklearn.utils.class_weight import compute_class_weight
 import scipy.sparse as sp
-import os
+
+# הגדרת Backend למניעת שגיאות בתצוגה בשרתים ללא מסך
+import matplotlib
+matplotlib.use('Agg')
 
 def _to_csr_int32(X):
     X = X.tocsr()
     if X.indices.dtype != np.int32 or X.indptr.dtype != np.int32:
         X = sp.csr_matrix(
-                (X.data, X.indices.astype(np.int32), X.indptr.astype(np.int32)), 
+                (X.data, X.indices.astype(np.int32), X.indptr.astype(np.int32)),
                 shape=X.shape)
     return X
 
@@ -32,7 +38,7 @@ FAKE_LABEL = 0  # {'fake': 0, 'real': 1}
 REAL_LABEL = 1
 
 # =========================
-# 1) Top Augmantation
+# 1) Text Augmentation
 # =========================
 EMOJIS = ["🙂","🔥","❗","❓","😮","🤔","📢","💥"]
 HEBREW_NIKKUD = re.compile(r"[\u0591-\u05C7]")
@@ -80,11 +86,11 @@ def apply_mixed_aug(texts: List[str], frac: float=0.7) -> List[str]:
     return out
 
 # =========================
-# 2) loqd data (only text)
+# 2) Load data (only text)
 # =========================
 def load_text_label_only(df_path: str) -> Tuple[List[str], np.ndarray]:
     df = pl.read_parquet(df_path) if df_path.endswith(".parquet") else pl.read_csv(df_path)
-    col_candidates = ["text_ns_text", "text"] 
+    col_candidates = ["text_ns_text", "text"]
     for c in col_candidates:
         if c in df.columns:
             texts = df[c].cast(pl.Utf8).fill_null("").to_list()
@@ -95,7 +101,7 @@ def load_text_label_only(df_path: str) -> Tuple[List[str], np.ndarray]:
     return texts, y
 
 # =========================
-# 3) using LLM for external knowledge
+# 3) External Knowledge (LLM)
 # =========================
 try:
     from openai import OpenAI
@@ -105,9 +111,9 @@ except Exception:
 @dataclass
 class ExternalKnowledgeCfg:
     enabled: bool = False
-    max_chars: int = 800          
-    model: str = "gpt-4o-mini"    # OpenAI model name
-    api_key: Optional[str] = None # OPENAI_API_KEY
+    max_chars: int = 800
+    model: str = "gpt-4o-mini"
+    api_key: Optional[str] = None
     timeout_s: int = 30
     system_prompt: str = (
         "You are helping by providing concise and neutral factual context. "
@@ -140,29 +146,23 @@ def fetch_topic_background(article_text: str, cfg: ExternalKnowledgeCfg) -> str:
     """).strip()
 
     try:
-        resp = client.responses.create(
+        resp = client.chat.completions.create(  # Fixed: changed from responses.create to chat.completions.create
             model=cfg.model,
-            input=[
+            messages=[
                 {"role": "system", "content": cfg.system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             timeout=cfg.timeout_s,
         )
-        out = (resp.output_text or "").strip()
+        out = (resp.choices[0].message.content or "").strip()
         if len(out) > cfg.max_chars:
             out = out[: cfg.max_chars].rstrip() + "…"
         return out
     except Exception:
         return ""
 
-def attach_external_context(text: str, cfg: ExternalKnowledgeCfg) -> str:
-    if not cfg.enabled:
-        return text
-    ctx = fetch_topic_background(text, cfg)
-    return text if not ctx else f"{text}\n\n[EXT_KNOWLEDGE]\n{ctx}"
-
 # =========================
-# 4) training function
+# 4) Training function
 # =========================
 @dataclass
 class TrainCfg:
@@ -170,8 +170,8 @@ class TrainCfg:
     aug_frac: float = 0.7
     seed: int = 42
     test_fraction: float = 0.2
-    batch_size: int = 50_000    
-    max_train_docs: Optional[int] = None  
+    batch_size: int = 50_000
+    max_train_docs: Optional[int] = None
 
 
 def train_simple_aug_text(
@@ -196,9 +196,11 @@ def train_simple_aug_text(
     Xtr_txt = [texts[i] for i in tr_idx]; ytr = y[tr_idx]
     Xva_txt = [texts[i] for i in va_idx]; yva = y[va_idx]
 
-    # stub
+    # External Knowledge Injection (Stub/Real)
     if ext_cfg.enabled:
-        def add_bg(t): return t + " || " + fetch_topic_background_stub(t, ext_cfg)[:ext_cfg.max_chars]
+        # Note: calling the real function here, assuming it's feasible for dataset size
+        # or use a pre-computed cache in production.
+        def add_bg(t): return t + " || " + fetch_topic_background(t, ext_cfg)[:ext_cfg.max_chars]
         Xtr_txt = [add_bg(t) for t in Xtr_txt]
         Xva_txt = [add_bg(t) for t in Xva_txt]
 
@@ -211,50 +213,65 @@ def train_simple_aug_text(
         ngram_range=(1,2), min_df=5, sublinear_tf=True,
         max_features=cfg.max_features, dtype=np.float32
     )
-    vect.fit(Xtr_txt)  
+    print("Fitting Vectorizer...")
+    vect.fit(Xtr_txt)
+
+    # Pre-transform Validation set for monitoring
+    print("Transforming Validation Set...")
+    Xva = vect.transform(Xva_txt)
+    Xva = _to_csr_int32(Xva)
 
     clf = SGDClassifier(loss="log_loss", alpha=1e-5, random_state=cfg.seed)
     classes = np.array([0, 1], dtype=int)
     cw = compute_class_weight(class_weight="balanced", classes=classes, y=ytr)
-    wmap = {int(c): float(w) for c, w in zip(classes, cw)}  
+    wmap = {int(c): float(w) for c, w in zip(classes, cw)}
+    
     n = len(Xtr_txt)
     bs = max(1, int(cfg.batch_size))
-
-    # warm start 
+    
+    # --- Training Loop with Monitoring ---
+    train_history = {"batch": [], "val_accuracy": []}
+    
     start = 0
-    end = min(n, bs)
-    X_batch = vect.transform(Xtr_txt[start:end])
-    X_batch_aug_txt = apply_mixed_aug(Xtr_txt[start:end], frac=cfg.aug_frac)
-    X_batch_aug = vect.transform(X_batch_aug_txt)
-    Xb = sp.vstack([X_batch, X_batch_aug], format="csr")
-    yb = np.concatenate([ytr[start:end], ytr[start:end]])
-    Xb = _to_csr_int32(Xb)
-    sw = np.array([wmap[int(yy)] for yy in yb], dtype=np.float32) 
-    clf.partial_fit(Xb, yb, classes=classes, sample_weight=sw) 
-
-    start = end
+    batch_idx = 0
+    
     while start < n:
         end = min(n, start + bs)
-        X_batch = vect.transform(Xtr_txt[start:end])
-        X_batch_aug_txt = apply_mixed_aug(Xtr_txt[start:end], frac=cfg.aug_frac)
+        print(f"Training batch {batch_idx+1}: samples {start} to {end}...")
+        
+        # Prepare Batch
+        current_texts = Xtr_txt[start:end]
+        X_batch = vect.transform(current_texts)
+        X_batch_aug_txt = apply_mixed_aug(current_texts, frac=cfg.aug_frac)
         X_batch_aug = vect.transform(X_batch_aug_txt)
+        
         Xb = sp.vstack([X_batch, X_batch_aug], format="csr")
         yb = np.concatenate([ytr[start:end], ytr[start:end]])
         Xb = _to_csr_int32(Xb)
-        sw = np.array([wmap[int(yy)] for yy in yb], dtype=np.float32) 
-        clf.partial_fit(Xb, yb, sample_weight=sw) 
+        sw = np.array([wmap[int(yy)] for yy in yb], dtype=np.float32)
+        
+        clf.partial_fit(Xb, yb, classes=classes, sample_weight=sw)
+        
+        # Monitor Accuracy
+        val_pred = clf.predict(Xva)
+        acc_curr = accuracy_score(yva, val_pred)
+        train_history["batch"].append(batch_idx + 1)
+        train_history["val_accuracy"].append(acc_curr)
+        print(f" -> Batch {batch_idx+1} Val Accuracy: {acc_curr:.4f}")
+        
         start = end
+        batch_idx += 1
 
-    Xva = vect.transform(Xva_txt)
-    Xva = _to_csr_int32(Xva)
+    # Final Predictions
     proba = clf.predict_proba(Xva)
     fake_idx = list(clf.classes_).index(0)
-    p_va = proba[:, fake_idx]
+    p_va = proba[:, fake_idx] # Prob of being FAKE
 
     y_fake_true = (yva == 0).astype(int)
     y_fake_pred = (p_va >= 0.5).astype(int)
     y_cls_pred  = np.where(p_va >= 0.5, 0, 1)
 
+    # Metrics
     acc   = accuracy_score(yva, y_cls_pred)
     prauc = average_precision_score(y_fake_true, p_va)
     roc   = roc_auc_score(y_fake_true, p_va)
@@ -268,6 +285,47 @@ def train_simple_aug_text(
         "f1_fake@0.5": float(f1fk),
     }
 
+    # =========================
+    # Generate Plots
+    # =========================
+    
+    # 1. Training Progress (Learning Curve)
+    plt.figure(figsize=(10, 6))
+    plt.plot(train_history["batch"], train_history["val_accuracy"], marker='o', linestyle='-')
+    plt.title("Training Progress: Validation Accuracy per Batch")
+    plt.xlabel("Batch Number")
+    plt.ylabel("Validation Accuracy")
+    plt.grid(True)
+    plt.savefig(out_dir / "training_progress.png")
+    plt.close()
+
+    # 2. ROC Curve
+    fpr, tpr, thresholds = roc_curve(y_fake_true, p_va)
+    plt.figure(figsize=(8, 6))
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc:.2f})')
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver Operating Characteristic (ROC)')
+    plt.legend(loc="lower right")
+    plt.savefig(out_dir / "roc_curve.png")
+    plt.close()
+
+    # 3. Confusion Matrix
+    cm = confusion_matrix(yva, y_cls_pred, labels=[0, 1])
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=['Fake (0)', 'Real (1)'], 
+                yticklabels=['Fake (0)', 'Real (1)'])
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.title('Confusion Matrix')
+    plt.savefig(out_dir / "confusion_matrix.png")
+    plt.close()
+
+    # Save Models
     joblib.dump(vect, out_dir / "tfidf.pkl")
     joblib.dump(clf,  out_dir / "sgd_logloss.pkl")
     (out_dir / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -275,7 +333,7 @@ def train_simple_aug_text(
     return {"out_dir": str(out_dir), "metrics": metrics}
 
 # =========================
-# 5) predict with explanation (LIME/ SHAP)
+# 5) Predict with explanation
 # =========================
 def predict_with_explanation(
     text: str,
@@ -291,7 +349,11 @@ def predict_with_explanation(
 
     raw = text
     if ext_cfg.enabled:
-        raw += " || " + fetch_topic_background_stub(text, ext_cfg)
+        # Stub logic replaced with actual logic call if needed, 
+        # or assuming fetch_topic_background is available.
+        ctx = fetch_topic_background(text, ext_cfg)
+        if ctx:
+             raw += " || " + ctx
 
     X  = vect.transform([raw])
     X  = _to_csr_int32(X)
@@ -317,23 +379,51 @@ def predict_with_explanation(
     elif explain == "shap":
         import shap
         import polars as pl
-        import random
-        random.seed(42)
-        DF = "/home/shlomias/fake_news_detection/data/df_feat.csv"
-        df = pl.read_parquet(DF) if DF.endswith(".parquet") else pl.read_csv(DF)
-        text_col = "text_ns_text" if "text_ns_text" in df.columns else "text"
-        all_texts = [t or "" for t in df.get_column(text_col).cast(pl.Utf8).fill_null("").to_list()]
-        k = min(100, len(all_texts))
-        background_texts = random.sample(all_texts, k=k)
-        X_bg = vect.transform(background_texts)
-        X_bg = _to_csr_int32(X_bg)
-        expl = shap.LinearExplainer(clf, X_bg, feature_perturbation="interventional")
-        sv_all = expl.shap_values(X)
-        idx = list(clf.classes_).index(0)
-        sv = sv_all[idx]
-        arr = sv.toarray().ravel() if hasattr(sv, "toarray") else np.ravel(sv)
-        feats = vect.get_feature_names_out()
-        order = np.argsort(np.abs(arr))[::-1][:top_k]
-        out["explanation"] = {"method":"shap",
-                              "weights":[{"feature":feats[i], "shap":float(arr[i])} for i in order]}
+        # Note: Paths here should ideally be configurable or relative
+        DF_PATH = "/home/shlomias/fake_news_detection/data/df_feat.csv" 
+        if os.path.exists(DF_PATH):
+            df = pl.read_parquet(DF_PATH) if DF_PATH.endswith(".parquet") else pl.read_csv(DF_PATH)
+            text_col = "text_ns_text" if "text_ns_text" in df.columns else "text"
+            all_texts = [t or "" for t in df.get_column(text_col).cast(pl.Utf8).fill_null("").to_list()]
+            k = min(100, len(all_texts))
+            background_texts = random.sample(all_texts, k=k)
+            X_bg = vect.transform(background_texts)
+            X_bg = _to_csr_int32(X_bg)
+            expl = shap.LinearExplainer(clf, X_bg, feature_perturbation="interventional")
+            sv_all = expl.shap_values(X)
+            idx = list(clf.classes_).index(0)
+            sv = sv_all[idx]
+            arr = sv.toarray().ravel() if hasattr(sv, "toarray") else np.ravel(sv)
+            feats = vect.get_feature_names_out()
+            order = np.argsort(np.abs(arr))[::-1][:top_k]
+            out["explanation"] = {"method":"shap",
+                                  "weights":[{"feature":feats[i], "shap":float(arr[i])} for i in order]}
+        else:
+             out["explanation"] = {"error": "Background data for SHAP not found."}
+
     return out
+
+# ==========================================
+# הוסף את זה לסוף הקובץ td_idf_classifier.py
+# ==========================================
+
+if __name__ == "__main__":
+    # הגדרות נתיבים
+    DATA_FILE = "/home/shlomias/fake_news_detection/data/df_feat.csv"
+    OUTPUT_DIR = "/home/shlomias/fake_news_detection/artifacts_simple"
+    
+    print("Starting TF-IDF Training Pipeline...")
+    
+    # הרצת האימון
+    train_simple_aug_text(
+        df_path=DATA_FILE,
+        out_dir=OUTPUT_DIR,
+        cfg=TrainCfg(
+            max_features=200_000,
+            aug_frac=0.7,
+            batch_size=50_000,
+            seed=42
+        )
+    )
+    
+    print("TF-IDF Pipeline Completed.")
