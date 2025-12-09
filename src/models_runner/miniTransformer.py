@@ -5,14 +5,20 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import joblib
-
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.linear_model import SGDClassifier, LogisticRegression
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import (
+    accuracy_score, f1_score, roc_curve, roc_auc_score, confusion_matrix
+)
 from sklearn.model_selection import train_test_split
 
 from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 
+# הגדרת Backend למניעת שגיאות בתצוגה בשרתים ללא מסך
+import matplotlib
+matplotlib.use('Agg')
 
 # ===================== Paths & Settings =====================
 DATA_PATH = Path("/home/shlomias/fake_news_detection/data/df_feat.csv")
@@ -174,10 +180,12 @@ else:
     print(f"Saved meta-classifier to: {META_CLF_PATH}")
 
 print("Predicting with meta-classifier...")
-test_meta_pred = meta_clf.predict(test_meta_X)
+test_meta_prob = meta_clf.predict_proba(test_meta_X)[:, 1] # Get probabilities for ROC
+test_meta_pred = (test_meta_prob >= 0.5).astype(int)
 
 test_meta_acc = accuracy_score(test_y, test_meta_pred)
 test_meta_f1  = f1_score(test_y, test_meta_pred, average="binary")
+test_meta_auc = roc_auc_score(test_y, test_meta_prob)
 
 print("\n=== Late Fusion (Meta Model) ===")
 print(f"TEST Accuracy: {test_meta_acc:.4f}")
@@ -189,9 +197,11 @@ base_emb_pred   = (test_prob_emb >= 0.5).astype(int)
 
 base_tfidf_acc = accuracy_score(test_y, base_tfidf_pred)
 base_tfidf_f1  = f1_score(test_y, base_tfidf_pred, average="binary")
+base_tfidf_auc = roc_auc_score(test_y, test_prob_tfidf)
 
 base_emb_acc = accuracy_score(test_y, base_emb_pred)
 base_emb_f1  = f1_score(test_y, base_emb_pred, average="binary")
+base_emb_auc = roc_auc_score(test_y, test_prob_emb)
 
 print("\n=== Base Models ===")
 print(f"TF-IDF model    → Acc: {base_tfidf_acc:.4f}, F1: {base_tfidf_f1:.4f}")
@@ -202,19 +212,84 @@ metrics = {
     "late_fusion": {
         "test_accuracy": float(test_meta_acc),
         "test_f1": float(test_meta_f1),
+        "test_auc": float(test_meta_auc),
     },
     "tfidf_model": {
         "test_accuracy": float(base_tfidf_acc),
         "test_f1": float(base_tfidf_f1),
+        "test_auc": float(base_tfidf_auc),
     },
     "emb_model": {
         "test_accuracy": float(base_emb_acc),
         "test_f1": float(base_emb_f1),
+        "test_auc": float(base_emb_auc),
     },
 }
 
 with open(TEST_METRICS_PATH, "w", encoding="utf-8") as f:
     json.dump(metrics, f, indent=2)
+
+# ===================== Generate & Save Plots =====================
+
+# 1. Comparative ROC Curve
+plt.figure(figsize=(10, 8))
+
+# TF-IDF ROC
+fpr_tfidf, tpr_tfidf, _ = roc_curve(test_y, test_prob_tfidf)
+plt.plot(fpr_tfidf, tpr_tfidf, label=f'TF-IDF (AUC = {base_tfidf_auc:.3f})', linestyle='--')
+
+# Embeddings ROC
+fpr_emb, tpr_emb, _ = roc_curve(test_y, test_prob_emb)
+plt.plot(fpr_emb, tpr_emb, label=f'Embeddings (AUC = {base_emb_auc:.3f})', linestyle='-.')
+
+# Fusion ROC
+fpr_meta, tpr_meta, _ = roc_curve(test_y, test_meta_prob)
+plt.plot(fpr_meta, tpr_meta, label=f'Late Fusion (AUC = {test_meta_auc:.3f})', linewidth=3, color='purple')
+
+plt.plot([0, 1], [0, 1], 'k--', lw=1)
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curve Comparison: TF-IDF vs Embeddings vs Fusion')
+plt.legend(loc="lower right")
+plt.grid(alpha=0.3)
+plt.savefig(LF_DIR / "comparison_roc_curve.png")
+plt.close()
+
+# 2. Comparative Confusion Matrices
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+# TF-IDF CM
+cm_tfidf = confusion_matrix(test_y, base_tfidf_pred, labels=[0, 1])
+sns.heatmap(cm_tfidf, annot=True, fmt='d', cmap='Blues', ax=axes[0], cbar=False)
+axes[0].set_title(f'TF-IDF\nAcc: {base_tfidf_acc:.3f}')
+axes[0].set_xlabel('Predicted')
+axes[0].set_ylabel('Actual')
+axes[0].set_xticklabels(['Fake', 'Real'])
+axes[0].set_yticklabels(['Fake', 'Real'])
+
+# Embeddings CM
+cm_emb = confusion_matrix(test_y, base_emb_pred, labels=[0, 1])
+sns.heatmap(cm_emb, annot=True, fmt='d', cmap='Greens', ax=axes[1], cbar=False)
+axes[1].set_title(f'Embeddings\nAcc: {base_emb_acc:.3f}')
+axes[1].set_xlabel('Predicted')
+axes[1].set_xticklabels(['Fake', 'Real'])
+axes[1].set_yticklabels(['', ''])
+
+# Fusion CM
+cm_meta = confusion_matrix(test_y, test_meta_pred, labels=[0, 1])
+sns.heatmap(cm_meta, annot=True, fmt='d', cmap='Purples', ax=axes[2], cbar=False)
+axes[2].set_title(f'Late Fusion\nAcc: {test_meta_acc:.3f}')
+axes[2].set_xlabel('Predicted')
+axes[2].set_xticklabels(['Fake', 'Real'])
+axes[2].set_yticklabels(['', ''])
+
+plt.suptitle("Confusion Matrix Comparison", fontsize=16)
+plt.tight_layout()
+plt.savefig(LF_DIR / "comparison_confusion_matrix.png")
+plt.close()
+
 
 print(f"\nSaved metrics to: {TEST_METRICS_PATH}")
 print("\nArtifacts:")
@@ -224,3 +299,4 @@ print(f"  Embeddings classifier: {EMB_CLF_PATH}")
 print(f"  Meta-classifier: {META_CLF_PATH}")
 print(f"  Train embeddings: {TRAIN_EMB_PATH}")
 print(f"  Test embeddings:  {TEST_EMB_PATH}")
+print(f"  Plots saved in: {LF_DIR}")
